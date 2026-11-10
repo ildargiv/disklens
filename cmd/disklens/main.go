@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"disklens/internal/ncdujson"
 	"disklens/internal/scanner"
 )
 
@@ -20,33 +22,108 @@ func main() {
 	top := flag.Int("top", 0, "show only the N largest children per level (0 = all)")
 	showItems := flag.Bool("items", true, "show file/dir counts")
 	ascii := flag.Bool("ascii", false, "ASCII size bars instead of unicode blocks")
+	si := flag.Bool("si", false, "decimal units (kB/MB/GB) instead of binary (KiB/MiB/GiB)")
+	apparent := flag.Bool("apparent", false, "report apparent size instead of size on disk")
+	summarize := flag.Bool("summarize", false, "print only the totals")
+	exportPath := flag.String("o", "", "export the scan as ncdu-compatible JSON ('-' for stdout)")
+	importPath := flag.String("f", "", "import a scan from an ncdu/disklens JSON file instead of scanning")
+	var (
+		root         *scanner.Node
+		err          error
+		abs          string
+		dirArg       *string
+		diskMeasured bool
+		start        = time.Now()
+	)
+
 	flag.Parse()
-
-	dir := "."
-	if flag.NArg() > 0 {
-		dir = flag.Arg(0)
-	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		fatal(err)
+	// Accept flags both before and after the directory argument:
+	// "disklens C:\\photos -o out.json" must work like "disklens -o out.json C:\\photos".
+	if rest := flag.Args(); len(rest) > 0 {
+		dirArg = &rest[0]
+		flag.CommandLine.Parse(rest[1:])
 	}
 
-	start := time.Now()
-	root, err := scanner.Scan(abs, scanner.Options{Workers: *workers})
-	if err != nil {
-		fatal(err)
+	if *importPath != "" {
+		f, ferr := os.Open(*importPath)
+		if ferr != nil {
+			fatal(ferr)
+		}
+		defer f.Close()
+		root, err = ncdujson.Import(f)
+		if err != nil {
+			fatal(err)
+		}
+		abs = root.Path
+		diskMeasured = true // ncdu dumps carry dsize; missing values were estimated
+	} else {
+		dir := "."
+		if dirArg != nil {
+			dir = *dirArg
+		}
+		abs, err = filepath.Abs(dir)
+		if err != nil {
+			fatal(err)
+		}
+		root, err = scanner.Scan(abs, scanner.Options{
+			Workers:   *workers,
+			DiskUsage: !*apparent,
+			KeepFiles: *exportPath != "",
+		})
+		if err != nil {
+			fatal(err)
+		}
+		diskMeasured = !*apparent
 	}
 
-	render(os.Stdout, root, *depth, *top, *showItems, *ascii, 0)
-	fmt.Printf("\ntotal %s  |  %s files, %s dirs  |  %s  |  %.2fs",
-		human(root.Size), humanInt(root.Files), humanInt(root.Dirs), abs, time.Since(start).Seconds())
+	if *exportPath != "" {
+		if err := export(root, *exportPath, diskMeasured); err != nil {
+			fatal(err)
+		}
+	}
+
+	// When piped, plain ASCII output is safer for other tools.
+	if !stdoutIsTTY() {
+		*ascii = true
+	}
+
+	if !*summarize {
+		render(os.Stdout, root, *depth, *top, *showItems, *ascii, *si, 0)
+	}
+
+	fmt.Printf("\ntotal %s", human(root.Size, *si))
+	if !*apparent && root.Disk > 0 {
+		fmt.Printf(" on disk (%s apparent)", human(root.Size, *si))
+	}
+	fmt.Printf("  |  %s files, %s dirs  |  %s  |  %.2fs", humanInt(root.Files), humanInt(root.Dirs), abs, time.Since(start).Seconds())
 	if root.Errors > 0 {
 		fmt.Printf("  |  %s dirs inaccessible", humanInt(root.Errors))
 	}
 	fmt.Println()
 }
 
-func render(w io.Writer, n *scanner.Node, remaining, top int, showItems, ascii bool, indent int) {
+func export(root *scanner.Node, path string, diskMeasured bool) error {
+	if path == "-" {
+		return ncdujson.Export(os.Stdout, root, ncdujson.ExportOptions{DiskMeasured: diskMeasured})
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	bw := bufio.NewWriter(f)
+	if err := ncdujson.Export(bw, root, ncdujson.ExportOptions{DiskMeasured: diskMeasured}); err != nil {
+		return err
+	}
+	return bw.Flush()
+}
+
+func stdoutIsTTY() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func render(w io.Writer, n *scanner.Node, remaining, top int, showItems, ascii, si bool, indent int) {
 	kids := append([]*scanner.Node(nil), n.Children...)
 	sort.Slice(kids, func(i, j int) bool { return kids[i].Size > kids[j].Size })
 	if top > 0 && len(kids) > top {
@@ -60,11 +137,11 @@ func render(w io.Writer, n *scanner.Node, remaining, top int, showItems, ascii b
 				dirs += r.Dirs
 			}
 			fmt.Fprintf(w, "%*s  %9s       + %d more (%s, %s files, %s dirs)\n",
-				indent, "", human(sum), len(rest), human(sum), humanInt(files), humanInt(dirs))
+				indent, "", human(sum, si), len(rest), human(sum, si), humanInt(files), humanInt(dirs))
 		}()
 	}
 	for _, c := range kids {
-		fmt.Fprintf(w, "%*s%s %s %s", indent, "", human(c.Size), sizeBar(c.Size, n.Size, ascii), c.Name)
+		fmt.Fprintf(w, "%*s%s %s %s", indent, "", human(c.Size, si), sizeBar(c.Size, n.Size, ascii), c.Name)
 		if showItems {
 			fmt.Fprintf(w, "   (%s files, %s dirs)", humanInt(c.Files), humanInt(c.Dirs))
 		}
@@ -73,7 +150,7 @@ func render(w io.Writer, n *scanner.Node, remaining, top int, showItems, ascii b
 		}
 		fmt.Fprintln(w)
 		if remaining != 0 {
-			render(w, c, remaining-1, top, showItems, ascii, indent+2)
+			render(w, c, remaining-1, top, showItems, ascii, si, indent+2)
 		}
 	}
 }
@@ -96,17 +173,22 @@ func sizeBar(size, parent int64, ascii bool) string {
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
-func human(n int64) string {
-	const unit = 1024
+func human(n int64, si bool) string {
+	unit := int64(1024)
+	suffix := "iB"
+	if si {
+		unit = 1000
+		suffix = "B"
+	}
 	if n < unit {
 		return fmt.Sprintf("%d B", n)
 	}
-	div, exp := int64(unit), 0
+	div, exp := unit, 0
 	for v := n / unit; v >= unit; v /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%.1f %c%s", float64(n)/float64(div), "kMGTPE"[exp], suffix)
 }
 
 func humanInt(n int64) string {

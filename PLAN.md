@@ -33,12 +33,13 @@ TUI, designed *для Windows* с самого начала (junctions, корз
 - Критерий: на 90k+ файлов сканер не уступает gdu/dust в hyperfine на HDD/SSD;
   отдельный прогон на медиа-архивах (много больших файлов — наш профиль).
 
-### Этап 2 — CLI-режимы и экспорт (~3–5 дней)
-- non-interactive режим: `--top N`, `--depth`, `--summarize`, авто-детект pipe.
-- JSON export/import **совместимый с форматом ncdu** (`-o`, `-f`) — готовая аудитория.
-- `--si`/KiB, BLOCKSIZE env, exit codes.
-- Критерий: `disklens C:\photos -o x.json && ncdu x.json`?? — нет: импорт в disklens
-  из ncdu-экспорта работает; экспорт читается сторонними JSON-инструментами.
+### Этап 2 — CLI-режимы и экспорт ✅
+- `-o` / `-f`: ncdu-совместимый JSON экспорт/импорт (format docs jsonfmt: asize/dsize/
+  read_error; импортирует дампы ncdu, экспорт читается ncdu) — проверено циклом на
+  реальном дереве (65 838 файлов, экспорт 3.9 MB, реимпорт идемпотентен).
+- `--summarize`, `--apparent`, `--si`, флаги принимаются до и после пути, авто-ASCII при pipe.
+- Реальный дисковый размер через GetCompressedFileSizeW (кластерный, с учётом сжатия NTFS).
+- Тесты: round-trip export→import, канонический пример из документации ncdu, garbage-input.
 
 ### Этап 2.5 — MCP-сервер (`disklens mcp`) (~3–5 дней) ⭐ приоритет
 

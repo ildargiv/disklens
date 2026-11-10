@@ -26,20 +26,35 @@ type Options struct {
 	// FollowSymlinks makes the scanner follow *file* symlinks (directory
 	// symlinks and junctions are never followed on Windows).
 	FollowSymlinks bool
+	// DiskUsage measures real on-disk sizes (Windows: GetCompressedFileSizeW).
+	// Without it, Node.Disk and FileEntry.Disk are not meaningful.
+	DiskUsage bool
+	// KeepFiles stores per-file entries in Node.FileEntries. Needed for
+	// ncdu-compatible export and for browsing individual files in a TUI.
+	KeepFiles bool
+}
+
+// FileEntry is a single regular file inside a directory node.
+type FileEntry struct {
+	Name     string
+	Apparent int64 // lstat st_size
+	Disk     int64 // on-disk size; valid only when Options.DiskUsage was set
 }
 
 // Node is one directory in the scanned tree.
 type Node struct {
 	Name  string
 	Path  string
-	Size  int64 // after aggregate(): total bytes of the subtree
+	Size  int64 // after aggregate(): total apparent bytes of the subtree
+	Disk  int64 // after aggregate(): total on-disk bytes (requires DiskUsage)
 	Files int64 // after aggregate(): total file count of the subtree
 	Dirs  int64 // after aggregate(): total directory count of the subtree
 
 	HasError bool  // this directory (or one below it) could not be read fully
 	Errors   int64 // number of unreadable directories in the subtree
 
-	Children []*Node
+	FileEntries []FileEntry // direct files, only populated when KeepFiles is set
+	Children    []*Node
 }
 
 type scanState struct {
@@ -140,6 +155,18 @@ func (s *scanState) scanOne(n *Node) {
 		default:
 			n.Size += info.Size()
 			n.Files++
+			if s.opt.KeepFiles || s.opt.DiskUsage {
+				disk := info.Size()
+				if s.opt.DiskUsage {
+					disk = diskSize(filepath.Join(n.Path, e.Name()), info.Size())
+				}
+				n.Disk += disk
+				if s.opt.KeepFiles {
+					n.FileEntries = append(n.FileEntries, FileEntry{
+						Name: e.Name(), Apparent: info.Size(), Disk: disk,
+					})
+				}
+			}
 		}
 	}
 }
@@ -149,6 +176,7 @@ func aggregate(n *Node) {
 	for _, c := range n.Children {
 		aggregate(c)
 		n.Size += c.Size
+		n.Disk += c.Disk
 		n.Files += c.Files
 		n.Dirs += c.Dirs + 1
 		if c.HasError {
