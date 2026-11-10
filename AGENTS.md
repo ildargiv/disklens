@@ -6,8 +6,10 @@ Guide for AI agents (coding agents and MCP-tool agents).
 
 - Build: `go build ./...` · Test: `go test ./...` (no gcc needed; `-race` only in CI on Linux)
 - Layout: `cmd/disklens` CLI · `internal/scanner` parallel BFS scanner · `internal/ncdujson`
-  ncdu JSON export/import · `internal/mcpserver` MCP stdio server
-- Rules: stdlib-first (the only external dep is go-sdk for MCP); keep scanner allocation-light;
+  ncdu JSON export/import · `internal/mcpserver` MCP stdio server · `internal/tui` browser
+  (bubbletea) · `internal/cleanup` classifier · `internal/recycle` Recycle Bin operations
+- Rules: scanner/ncdujson/cleanup/recycle are stdlib-only; external deps are go-sdk (MCP)
+  and bubbletea+lipgloss (TUI); keep scanner allocation-light;
   Windows semantics are first-class (reparse points must never be descended; inaccessible
   directories are errors reported as data, never swallowed).
 - Never introduce destructive behavior into scan paths. The only planned mutation tool is

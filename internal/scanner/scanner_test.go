@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -106,6 +108,30 @@ func TestSymlinksSkippedByDefault(t *testing.T) {
 	}
 	if got.Files != 3 || got.Size != 3500 {
 		t.Errorf("symlink should not be counted by default: got %d files / %d bytes", got.Files, got.Size)
+	}
+}
+
+func TestProgressCallback(t *testing.T) {
+	root := buildTree(t)
+	var calls atomic.Int64
+	var last ProgressState
+	var mu sync.Mutex
+	got, err := Scan(root, Options{Workers: 4, Progress: func(s ProgressState) {
+		calls.Add(1)
+		mu.Lock()
+		last = s
+		mu.Unlock()
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() == 0 {
+		t.Fatal("Progress was never called")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if last.Files != got.Files || last.Bytes != got.Size {
+		t.Errorf("final progress snapshot %+v != totals (files=%d bytes=%d)", last, got.Files, got.Size)
 	}
 }
 

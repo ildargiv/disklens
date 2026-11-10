@@ -16,6 +16,7 @@ import (
 	"disklens/internal/mcpserver"
 	"disklens/internal/ncdujson"
 	"disklens/internal/scanner"
+	"disklens/internal/tui"
 )
 
 func main() {
@@ -36,6 +37,7 @@ func main() {
 	summarize := flag.Bool("summarize", false, "print only the totals")
 	exportPath := flag.String("o", "", "export the scan as ncdu-compatible JSON ('-' for stdout)")
 	importPath := flag.String("f", "", "import a scan from an ncdu/disklens JSON file instead of scanning")
+	noTUI := flag.Bool("no-tui", false, "print a plain tree instead of opening the interactive TUI")
 	var (
 		root         *scanner.Node
 		err          error
@@ -51,6 +53,22 @@ func main() {
 	if rest := flag.Args(); len(rest) > 0 {
 		dirArg = &rest[0]
 		flag.CommandLine.Parse(rest[1:])
+	}
+
+	// Interactive mode: a TTY, no import, not --summarize -> the TUI owns the scan.
+	if *importPath == "" && !*noTUI && !*summarize && stdoutIsTTY() {
+		dir := "."
+		if dirArg != nil {
+			dir = *dirArg
+		}
+		tuiAbs, terr := filepath.Abs(dir)
+		if terr != nil {
+			fatal(terr)
+		}
+		if terr := tui.Run(tuiAbs); terr != nil {
+			fatal(terr)
+		}
+		return
 	}
 
 	if *importPath != "" {

@@ -32,6 +32,18 @@ type Options struct {
 	// KeepFiles stores per-file entries in Node.FileEntries. Needed for
 	// ncdu-compatible export and for browsing individual files in a TUI.
 	KeepFiles bool
+	// Progress, when set, is called with a live snapshot of running totals
+	// during the scan (every few dozen completed directories, from worker
+	// goroutines — implementations must be concurrency-safe).
+	Progress func(ProgressState)
+}
+
+// ProgressState is a non-authoritative live snapshot taken mid-scan; final
+// totals are on the Node after Scan returns.
+type ProgressState struct {
+	DirsDone int64 // directories fully listed so far
+	Files    int64 // files counted so far
+	Bytes    int64 // apparent bytes summed so far
 }
 
 // FileEntry is a single regular file inside a directory node.
@@ -61,6 +73,9 @@ type scanState struct {
 	queue   chan *Node
 	pending atomic.Int64
 	denied  atomic.Int64
+	done    atomic.Int64
+	files   atomic.Int64
+	bytes   atomic.Int64
 	opt     Options
 }
 
@@ -99,6 +114,9 @@ func Scan(root string, opt Options) (*Node, error) {
 
 	s.enqueue(rootNode)
 	wg.Wait()
+	if opt.Progress != nil {
+		opt.Progress(s.snapshot()) // final live snapshot matches the authoritative totals
+	}
 	aggregate(rootNode)
 	return rootNode, nil
 }
@@ -107,6 +125,10 @@ func Scan(root string, opt Options) (*Node, error) {
 type NotDirError struct{ Path string }
 
 func (e *NotDirError) Error() string { return e.Path + " is not a directory" }
+
+func (s *scanState) snapshot() ProgressState {
+	return ProgressState{DirsDone: s.done.Load(), Files: s.files.Load(), Bytes: s.bytes.Load()}
+}
 
 func (s *scanState) enqueue(n *Node) {
 	s.pending.Add(1)
@@ -120,6 +142,13 @@ func (s *scanState) enqueue(n *Node) {
 }
 
 func (s *scanState) scanOne(n *Node) {
+	if s.opt.Progress != nil {
+		defer func() {
+			if d := s.done.Add(1); d == 1 || d%32 == 0 {
+				s.opt.Progress(s.snapshot())
+			}
+		}()
+	}
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
 		n.HasError = true
@@ -155,6 +184,8 @@ func (s *scanState) scanOne(n *Node) {
 		default:
 			n.Size += info.Size()
 			n.Files++
+			s.files.Add(1)
+			s.bytes.Add(info.Size())
 			if s.opt.KeepFiles || s.opt.DiskUsage {
 				disk := info.Size()
 				if s.opt.DiskUsage {
