@@ -18,6 +18,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"disklens/internal/cleanup"
+	"disklens/internal/recycle"
 	"disklens/internal/scanner"
 )
 
@@ -90,7 +92,9 @@ func newServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "disklens", Version: version}, &mcp.ServerOptions{
 		Instructions: "disklens measures disk usage in parallel. scan() caches a tree; " +
 			"top/children/du then query the cache without re-reading the disk. " +
-			"All sizes are in bytes; size_disk is cluster-accurate on Windows.",
+			"All sizes are in bytes; size_disk is cluster-accurate on Windows. " +
+			"delete_to_recycle moves items to the Recycle Bin only (recoverable) and requires confirm:true; " +
+			"empty_recycle_bin is permanent and requires the user's explicit request.",
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -179,7 +183,102 @@ func newServer() *mcp.Server {
 		return nil, summarize(n, time.Since(start).Seconds()), nil
 	})
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "classify",
+		Description: "Cleanup candidates in a cached scan: status 'safe' (caches and dependency dirs " +
+			"that their tools recreate) vs 'review_first'. Read-only heuristic; sizes are subtree totals.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+		Path string `json:"path" jsonschema:"directory previously covered by a scan"`
+	}) (*mcp.CallToolResult, classifyResult, error) {
+		root, err := filepath.Abs(a.Path)
+		if err != nil {
+			return nil, classifyResult{}, errors.New("invalid path: " + a.Path)
+		}
+		n, ok := c.find(root)
+		if !ok {
+			return nil, classifyResult{}, errors.New("path is not covered by a cached scan; call scan() first: " + root)
+		}
+		cands := cleanup.Classify(n)
+		var safe, review int64
+		for _, cd := range cands {
+			if cd.Status == "safe" {
+				safe += cd.Disk
+			} else {
+				review += cd.Disk
+			}
+		}
+		return nil, classifyResult{
+			Path: n.Path, Candidates: cands, SafeDiskBytes: safe, ReviewDiskBytes: review,
+			Note: "candidates are not descended into; sizes are complete subtree totals",
+		}, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "delete_to_recycle",
+		Description: "Move a file or directory to the Windows Recycle Bin (recoverable; never a hard delete). " +
+			"Requires confirm:true. Refuses drive roots, Windows system directories and .git paths.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+		Path    string `json:"path" jsonschema:"absolute file or directory path"`
+		Confirm bool   `json:"confirm" jsonschema:"must be true: deliberate confirmation that the item goes to the Recycle Bin"`
+	}) (*mcp.CallToolResult, deleteResult, error) {
+		if !a.Confirm {
+			return nil, deleteResult{}, errors.New("refusing without confirm:true (items go to the Recycle Bin, recoverable)")
+		}
+		root, err := filepath.Abs(a.Path)
+		if err != nil {
+			return nil, deleteResult{}, errors.New("invalid path: " + a.Path)
+		}
+		if why := refuseReason(root); why != "" {
+			return nil, deleteResult{}, errors.New(why)
+		}
+		if _, err := os.Stat(root); err != nil {
+			return nil, deleteResult{}, errors.New("cannot read " + root + ": " + err.Error())
+		}
+		res := deleteResult{Path: root, Recoverable: true}
+		if n, ok := c.find(root); ok {
+			res.DiskBytes = n.Disk
+		}
+		if err := recycle.ToRecycleBin(root); err != nil {
+			return nil, deleteResult{}, errors.New("move to Recycle Bin failed: " + err.Error())
+		}
+		res.Note = "item is in the Recycle Bin and can be restored from there"
+		return nil, res, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "empty_recycle_bin",
+		Description: "PERMANENTLY destroy the contents of the Windows Recycle Bin. Requires confirm:true. Irreversible — call only after the user explicitly asked to empty it.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+		Confirm bool `json:"confirm" jsonschema:"must be true"`
+	}) (*mcp.CallToolResult, emptyResult, error) {
+		if !a.Confirm {
+			return nil, emptyResult{}, errors.New("refusing without confirm:true (emptying the Recycle Bin is permanent)")
+		}
+		if err := recycle.EmptyRecycleBin(); err != nil {
+			return nil, emptyResult{}, errors.New("emptying the Recycle Bin failed: " + err.Error())
+		}
+		return nil, emptyResult{Emptied: true, Warning: "Recycle Bin contents are now permanently gone"}, nil
+	})
+
 	return server
+}
+
+// refuseReason protects system-critical paths from delete_to_recycle.
+func refuseReason(abs string) string {
+	low := strings.ToLower(filepath.Clean(abs))
+	// Drive roots: "C:", "C:\\" -> volume name equals the whole path.
+	if trimmed := strings.TrimRight(low, "\\"); strings.ContainsAny(trimmed, ":") {
+		if vol := strings.ToLower(filepath.VolumeName(trimmed)); vol != "" && trimmed == vol {
+			return "refusing to delete a drive root: " + abs
+		}
+	}
+	segs := strings.Split(low, "\\")
+	for _, s := range segs[1:] {
+		if s == "windows" || s == "system volume information" || s == ".git" {
+			return "refusing to touch a protected path: " + abs
+		}
+	}
+	return ""
 }
 
 const defaultLimit = 20
@@ -197,6 +296,26 @@ type summary struct {
 type childrenResult struct {
 	Path    string  `json:"path"`
 	Entries []entry `json:"entries"`
+}
+
+type classifyResult struct {
+	Path            string              `json:"path"`
+	Candidates      []cleanup.Candidate `json:"candidates"`
+	SafeDiskBytes   int64               `json:"safe_disk_bytes"`
+	ReviewDiskBytes int64               `json:"review_first_disk_bytes"`
+	Note            string              `json:"note"`
+}
+
+type deleteResult struct {
+	Path        string `json:"path"`
+	DiskBytes   int64  `json:"disk_bytes_reported,omitempty"`
+	Recoverable bool   `json:"recoverable"`
+	Note        string `json:"note"`
+}
+
+type emptyResult struct {
+	Emptied bool   `json:"emptied"`
+	Warning string `json:"warning"`
 }
 
 type entry struct {

@@ -3,8 +3,10 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -72,7 +74,7 @@ func TestToolsListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"scan": false, "top": false, "children": false, "du": false}
+	want := map[string]bool{"scan": false, "top": false, "children": false, "du": false, "classify": false, "delete_to_recycle": false, "empty_recycle_bin": false}
 	for _, tl := range res.Tools {
 		want[tl.Name] = true
 	}
@@ -145,4 +147,83 @@ func TestTopWithoutScanFailsGracefully(t *testing.T) {
 	if !isErr {
 		t.Errorf("top on unscanned path should be a tool error, got: %s", txt)
 	}
+}
+
+func TestClassifyTool(t *testing.T) {
+	root := t.TempDir()
+	mk := func(rel string, size int) {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("package.json", 10)
+	mk(filepath.Join("node_modules", "x.js"), 1500)
+	mk(filepath.Join("__pycache__", "z.pyc"), 200)
+
+	cs := newTestSession(t)
+	if _, isErr := call(t, cs, "scan", map[string]any{"path": root}); isErr {
+		t.Fatal("scan failed")
+	}
+	txt, isErr := call(t, cs, "classify", map[string]any{"path": root})
+	if isErr {
+		t.Fatalf("classify error: %s", txt)
+	}
+	var res classifyResult
+	if err := json.Unmarshal([]byte(txt), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Candidates) != 2 {
+		t.Fatalf("candidates = %+v, want node_modules + __pycache__", res.Candidates)
+	}
+	if res.Candidates[0].Name != "node_modules" || res.Candidates[0].Status != "safe" {
+		t.Errorf("first candidate wrong: %+v", res.Candidates[0])
+	}
+	if res.SafeDiskBytes < 1700 {
+		t.Errorf("SafeDiskBytes = %d, want >= 1700", res.SafeDiskBytes)
+	}
+}
+
+func TestDeleteGuards(t *testing.T) {
+	root := testTree(t)
+	cs := newTestSession(t)
+
+	// no confirm -> refused
+	if _, isErr := call(t, cs, "delete_to_recycle", map[string]any{"path": root}); !isErr {
+		t.Error("delete without confirm must be refused")
+	}
+	// protected path -> refused even with confirm
+	gitDir := filepath.Join(root, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, isErr := call(t, cs, "delete_to_recycle", map[string]any{"path": gitDir, "confirm": true}); !isErr {
+		t.Error("deleting a .git path must be refused")
+	}
+	if _, isErr := call(t, cs, "delete_to_recycle", map[string]any{"path": `C:\`, "confirm": true}); !isErr {
+		t.Error("deleting a drive root must be refused")
+	}
+}
+
+func TestDeleteToRecycleWorks(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("recycle bin is a Windows concept")
+	}
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim.bin")
+	if err := os.WriteFile(victim, []byte("throwaway"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs := newTestSession(t)
+	txt, isErr := call(t, cs, "delete_to_recycle", map[string]any{"path": victim, "confirm": true})
+	if isErr {
+		t.Fatalf("delete_to_recycle error: %s", txt)
+	}
+	if _, err := os.Stat(victim); !os.IsNotExist(err) {
+		t.Errorf("victim still on disk after delete_to_recycle: %v", err)
+	}
+	fmt.Println("note: victim.bin is recoverable from the Windows Recycle Bin")
 }

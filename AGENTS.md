@@ -23,6 +23,9 @@ Server: `disklens mcp` (stdio).
 | `top` | `path`, `limit` (default 20) | biggest children (dirs AND files) of a cached scan |
 | `children` | `path`, `limit`, `sort` (size/name/files) | direct children of any cached path |
 | `du` | `path` | totals for one path; instant from cache, else scanned on the fly |
+| `classify` | `path` | cleanup candidates from a cached scan: `safe` vs `review_first`, with `hint` how each is recreated |
+| `delete_to_recycle` | `path`, `confirm:true` | moves the item to the Windows **Recycle Bin** (recoverable). Refuses drive roots, system dirs, `.git` |
+| `empty_recycle_bin` | `confirm:true` | PERMANENT. Call only after the user explicitly asked to empty it |
 
 Contract:
 - All sizes are **bytes**; `size_disk_bytes` is cluster-accurate on Windows (what deleting frees),
@@ -33,3 +36,5 @@ Contract:
   tool error explaining this — call `scan` and retry.
 - Junctions and directory symlinks are deliberately not scanned or counted (they would double-count).
 - Scans are cached server-side; re-`scan` a root to refresh. Prefer `du` for one-off questions.
+- Destructive contract: `delete_to_recycle` is the only deletion path and it is recoverable;
+  never call `empty_recycle_bin` unless the user asked for it in so many words.

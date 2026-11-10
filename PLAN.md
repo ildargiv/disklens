@@ -41,14 +41,14 @@ TUI, designed *для Windows* с самого начала (junctions, корз
 - Реальный дисковый размер через GetCompressedFileSizeW (кластерный, с учётом сжатия NTFS).
 - Тесты: round-trip export→import, канонический пример из документации ncdu, garbage-input.
 
-### Этап 2.5 — MCP-сервер (`disklens mcp`) — ядро готово ✅, хвост 🚧
+### Этап 2.5 — MCP-сервер (`disklens mcp`) ✅
 
-Инструменты `scan` / `top` / `children` / `du` работают: кэш сканов на сервере,
-структурированный вывод (structuredContent), stdio-рукопожатие проверено реальным
-JSON-RPC клиентом (initialize → tools/list → tools/call). Тесты: in-memory MCP-сессия.
-SDK: github.com/modelcontextprotocol/go-sdk v1.8 (tool errors возвращаем как `error` —
-SDK сам ставит isError; `mcp.NewToolResultError` в v1.8 нет).
-Осталось в этом этапе: `classify`, `delete_to_recycle` (COM Shell.Application), `empty_recycle_bin`.
+Все 7 инструментов: `scan` / `top` / `children` / `du` / `classify` / `delete_to_recycle` /
+`empty_recycle_bin`. Корзина Windows через SHFileOperationW (FOF_ALLOWUNDO) + SHEmptyRecycleBinW.
+classify: контекстно-маркерные правила (node_modules safe только рядом с package.json и т.п.),
+протестирован на реальном дереве (1.1 GB safe-кандидатов у пользователя).
+Safety: confirm-гейты, отказ на корнях дисков/system/.git (тест поймал слабую проверку — усилен
+в двух слоях). tool-ошибки через error → SDK ставит isError (агент может самокорректироваться).
 
 ### Этап 3 — TUI (~1–2 недели)
 - bubbles (или tcell) : навигация стрелками/vim-ключи, size bars, сортировка

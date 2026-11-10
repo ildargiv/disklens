@@ -38,8 +38,7 @@ Connect it like any MCP server, e.g.:
 
 1. ✅ parallel BFS scanner core, Windows reparse-point handling
 2. ✅ non-interactive CLI modes + ncdu-compatible JSON export/import
-3. ✅ MCP server core (`scan`/`top`/`children`/`du`) — pending in this stage: `classify`,
-   `delete_to_recycle`
+3. ✅ MCP server: `scan`/`top`/`children`/`du`/`classify`/`delete_to_recycle`/`empty_recycle_bin`
 4. TUI (navigation, sorting, live scan progress)
 5. Windows trump cards: Recycle Bin size + cleanup, cleanup projections
    (caches, Temp, node_modules), duplicate candidates for photo archives
