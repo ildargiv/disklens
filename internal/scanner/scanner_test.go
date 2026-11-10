@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -132,6 +133,44 @@ func TestProgressCallback(t *testing.T) {
 	defer mu.Unlock()
 	if last.Files != got.Files || last.Bytes != got.Size {
 		t.Errorf("final progress snapshot %+v != totals (files=%d bytes=%d)", last, got.Files, got.Size)
+	}
+}
+
+func TestCancelReturnsPartialTree(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 500; i++ {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("d%03d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel := make(chan struct{})
+	close(cancel) // already canceled: only the root itself should be drained
+	got, err := Scan(root, Options{Workers: 8, Cancel: cancel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Dirs != 0 || got.Files != 0 {
+		t.Errorf("canceled scan should produce an empty partial tree, got dirs=%d files=%d", got.Dirs, got.Files)
+	}
+}
+
+func TestReaggregateAfterRemoveChild(t *testing.T) {
+	root := &Node{Name: "r", Path: "r", directSize: 100, directFiles: 1, directDisk: 200}
+	child := &Node{Name: "c", Path: "r/c", directSize: 500, directFiles: 2, directDisk: 1000}
+	root.Children = []*Node{child}
+	aggregate(root)
+	if root.Size != 600 || root.Files != 3 || root.Disk != 1200 || root.Dirs != 1 {
+		t.Fatalf("pre-remove totals wrong: %+v", *root)
+	}
+	if !RemoveChild(root, "c") {
+		t.Fatal("RemoveChild failed")
+	}
+	if RemoveChild(root, "c") {
+		t.Error("second RemoveChild should report nothing removed")
+	}
+	Reaggregate(root)
+	if root.Size != 100 || root.Files != 1 || root.Disk != 200 || root.Dirs != 0 {
+		t.Errorf("post-remove totals wrong: size=%d files=%d disk=%d dirs=%d", root.Size, root.Files, root.Disk, root.Dirs)
 	}
 }
 

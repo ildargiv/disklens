@@ -50,12 +50,12 @@ classify: контекстно-маркерные правила (node_modules s
 Safety: confirm-гейты, отказ на корнях дисков/system/.git (тест поймал слабую проверку — усилен
 в двух слоях). tool-ошибки через error → SDK ставит isError (агент может самокорректироваться).
 
-### Этап 3 — TUI — ядро готово ✅, хвост 🚧
-bubbletea+lipgloss: live-прогресс скана (Progress callback в сканере, throttled Send),
-навигация (стрелки/vim: j/k/enter/h/esc), сортировка s/n/c, size-бары, scroll-вьюпорт,
-предупреждение `!` на нечитаемых папках. `--no-tui` / pipe / --summarize оставляют plain-вывод.
-Осталось: esc = остановить скан и показать собранное; d = удаление в корзину с подтверждением;
-фильтр '/'.
+### Этап 3 — TUI ✅
+bubbletea+lipgloss: live-прогресс (Progress callback + throttle), **esc во время скана =
+досрочная остановка** (Cancel канал в сканере, сохраняется собранное, пометка "partial scan"),
+навигация vim (j/k/enter/h/esc), сортировка s/n/c, фильтр `/`, **d = корзина с y-подтверждением**
+(scanner.RemoveChild + Reaggregate для корректных итогов; Guard через recycle.Guard — тот же,
+что у MCP). `--no-tui`/pipe/--summarize сохраняют plain-вывод.
 
 ### Этап 4 — Фичи-козыри (Windows-first) (~1 неделя)
 - Размер корзины как отдельная строка + "очистить корзину".

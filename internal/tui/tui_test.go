@@ -34,7 +34,7 @@ func names(items []item) []string {
 }
 
 func TestBuildItemsSize(t *testing.T) {
-	got := names(buildItems(testRoot(), "size"))
+	got := names(buildItems(testRoot(), "size", ""))
 	want := []string{"big", "rootfile.bin", "small"} // 5000 > 300 > 100, dirs+files mixed
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("size order = %v, want %v", got, want)
@@ -42,7 +42,7 @@ func TestBuildItemsSize(t *testing.T) {
 }
 
 func TestBuildItemsName(t *testing.T) {
-	got := names(buildItems(testRoot(), "name"))
+	got := names(buildItems(testRoot(), "name", ""))
 	want := []string{"big", "small", "rootfile.bin"} // dirs first alphabetically, then files
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("name order = %v, want %v", got, want)
@@ -50,7 +50,7 @@ func TestBuildItemsName(t *testing.T) {
 }
 
 func TestBuildItemsFiles(t *testing.T) {
-	got := names(buildItems(testRoot(), "files"))
+	got := names(buildItems(testRoot(), "files", ""))
 	want := []string{"big", "rootfile.bin", "small"} // files 2 > 1, ties by size
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("files order = %v, want %v", got, want)
@@ -114,6 +114,62 @@ func TestSortKeysAndQuit(t *testing.T) {
 	}
 	if cmd := key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}); cmd == nil {
 		t.Error("q should return a quit command")
+	}
+}
+
+func TestFilterFlow(t *testing.T) {
+	m := newBrowsedModel()
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if !m.typing {
+		t.Fatal("slash should start filter typing")
+	}
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("sm")})
+	if got := names(m.items); len(got) != 1 || got[0] != "small" {
+		t.Errorf("filter 'sm' -> %v, want [small]", got)
+	}
+	key(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := names(m.items); len(got) != 1 || got[0] != "small" {
+		t.Errorf("filter 's' -> %v, want [small]", got)
+	}
+	key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.filter != "" || m.typing || len(m.items) != 3 {
+		t.Errorf("esc should clear filter: filter=%q typing=%v items=%d", m.filter, m.typing, len(m.items))
+	}
+}
+
+func TestConfirmFlow(t *testing.T) {
+	m := newBrowsedModel()
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if m.confirm == nil || m.confirm.item.name != "big" {
+		t.Fatalf("d should open confirm on cursor item: %+v", m.confirm)
+	}
+	// any key other than y cancels
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.confirm != nil {
+		t.Error("n should cancel the confirm prompt")
+	}
+	// protected path: guard must refuse before the recycle call
+	m2 := newBrowsedModel()
+	gitNode := &scanner.Node{Name: ".git", Path: "/t/.git", Disk: 10}
+	m2.stack[0].Children = append(m2.stack[0].Children, gitNode)
+	m2.rebuild()
+	for i, it := range m2.items {
+		if it.name == ".git" {
+			m2.cursor = i
+		}
+	}
+	key(m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if m2.confirm == nil {
+		t.Fatal("confirm should open for .git item (guard runs on y)")
+	}
+	cmd := key(m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd != nil {
+		if msg, ok := cmd().(deleteDoneMsg); ok && msg.err == nil {
+			t.Error("guard must refuse deleting .git before touching the Recycle Bin")
+		}
+	}
+	if m2.confirm != nil {
+		t.Error("confirm should be resolved after y attempt")
 	}
 }
 

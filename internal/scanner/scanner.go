@@ -36,6 +36,9 @@ type Options struct {
 	// during the scan (every few dozen completed directories, from worker
 	// goroutines — implementations must be concurrency-safe).
 	Progress func(ProgressState)
+	// Cancel, when closed, makes the scan stop scheduling new directories and
+	// return the partial tree it has built so far (no error).
+	Cancel <-chan struct{}
 }
 
 // ProgressState is a non-authoritative live snapshot taken mid-scan; final
@@ -65,18 +68,27 @@ type Node struct {
 	HasError bool  // this directory (or one below it) could not be read fully
 	Errors   int64 // number of unreadable directories in the subtree
 
+	// direct* hold only this directory's own files (set during the scan);
+	// Size/Files/Disk/Errors are recomputed from them by aggregate/Reaggregate.
+	directSize     int64
+	directDisk     int64
+	directFiles    int64
+	directHasError bool
+	directErrors   int64
+
 	FileEntries []FileEntry // direct files, only populated when KeepFiles is set
 	Children    []*Node
 }
 
 type scanState struct {
-	queue   chan *Node
-	pending atomic.Int64
-	denied  atomic.Int64
-	done    atomic.Int64
-	files   atomic.Int64
-	bytes   atomic.Int64
-	opt     Options
+	queue    chan *Node
+	pending  atomic.Int64
+	denied   atomic.Int64
+	done     atomic.Int64
+	files    atomic.Int64
+	bytes    atomic.Int64
+	canceled atomic.Bool
+	opt      Options
 }
 
 // Scan walks root with a pool of worker goroutines and returns the tree.
@@ -101,10 +113,19 @@ func Scan(root string, opt Options) (*Node, error) {
 		go func() {
 			defer wg.Done()
 			for n := range s.queue {
-				s.scanOne(n)
+				if !s.canceled.Load() && opt.Cancel != nil {
+					select {
+					case <-opt.Cancel:
+						s.canceled.Store(true)
+					default:
+					}
+				}
+				if !s.canceled.Load() {
+					s.scanOne(n)
+				}
 				// The last worker to finish closes the queue, releasing everyone.
 				// pending is incremented on enqueue and decremented here, so it
-				// reaches zero only after every enqueued node has been scanned.
+				// reaches zero only after every enqueued node has been drained.
 				if s.pending.Add(-1) == 0 {
 					close(s.queue)
 				}
@@ -114,7 +135,7 @@ func Scan(root string, opt Options) (*Node, error) {
 
 	s.enqueue(rootNode)
 	wg.Wait()
-	if opt.Progress != nil {
+	if opt.Progress != nil && !s.canceled.Load() {
 		opt.Progress(s.snapshot()) // final live snapshot matches the authoritative totals
 	}
 	aggregate(rootNode)
@@ -151,16 +172,16 @@ func (s *scanState) scanOne(n *Node) {
 	}
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
-		n.HasError = true
-		n.Errors++
+		n.directHasError = true
+		n.directErrors++
 		s.denied.Add(1)
 		return
 	}
 	for _, e := range entries {
 		info, err := e.Info() // lstat semantics: does not follow links
 		if err != nil {
-			n.HasError = true
-			n.Errors++
+			n.directHasError = true
+			n.directErrors++
 			continue
 		}
 		mode := info.Mode()
@@ -182,8 +203,8 @@ func (s *scanState) scanOne(n *Node) {
 			n.Children = append(n.Children, child)
 			s.enqueue(child)
 		default:
-			n.Size += info.Size()
-			n.Files++
+			n.directSize += info.Size()
+			n.directFiles++
 			s.files.Add(1)
 			s.bytes.Add(info.Size())
 			if s.opt.KeepFiles || s.opt.DiskUsage {
@@ -191,7 +212,7 @@ func (s *scanState) scanOne(n *Node) {
 				if s.opt.DiskUsage {
 					disk = diskSize(filepath.Join(n.Path, e.Name()), info.Size())
 				}
-				n.Disk += disk
+				n.directDisk += disk
 				if s.opt.KeepFiles {
 					n.FileEntries = append(n.FileEntries, FileEntry{
 						Name: e.Name(), Apparent: info.Size(), Disk: disk,
@@ -203,16 +224,46 @@ func (s *scanState) scanOne(n *Node) {
 }
 
 // aggregate folds child totals into parents and marks error subtrees.
+// It recomputes totals from the direct* counters, so it is safe to call
+// repeatedly after tree edits (see Reaggregate).
 func aggregate(n *Node) {
+	n.Size = n.directSize
+	n.Files = n.directFiles
+	n.Disk = n.directDisk
+	n.Dirs = int64(len(n.Children))
+	n.HasError = n.directHasError
+	n.Errors = n.directErrors
 	for _, c := range n.Children {
 		aggregate(c)
 		n.Size += c.Size
 		n.Disk += c.Disk
 		n.Files += c.Files
-		n.Dirs += c.Dirs + 1
+		n.Dirs += c.Dirs
 		if c.HasError {
 			n.HasError = true
 		}
 		n.Errors += c.Errors
 	}
+}
+
+// Reaggregate recomputes subtree totals after the tree was edited in place
+// (e.g. an item was removed by the TUI after a Recycle Bin move).
+func Reaggregate(root *Node) { aggregate(root) }
+
+// RemoveChild removes a direct child directory or file entry by name and
+// reports whether anything was removed. Call Reaggregate afterwards.
+func RemoveChild(parent *Node, name string) bool {
+	for i, c := range parent.Children {
+		if c.Name == name {
+			parent.Children = append(parent.Children[:i], parent.Children[i+1:]...)
+			return true
+		}
+	}
+	for i, f := range parent.FileEntries {
+		if f.Name == name {
+			parent.FileEntries = append(parent.FileEntries[:i], parent.FileEntries[i+1:]...)
+			return true
+		}
+	}
+	return false
 }

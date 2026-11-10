@@ -18,10 +18,14 @@ type item struct {
 	entry *scanner.FileEntry
 }
 
-// buildItems assembles and sorts the rows for one directory node.
-func buildItems(n *scanner.Node, sortBy string) []item {
+// buildItems assembles, filters and sorts the rows for one directory node.
+func buildItems(n *scanner.Node, sortBy, filter string) []item {
 	items := make([]item, 0, len(n.Children)+len(n.FileEntries))
+	lowFilter := strings.ToLower(filter)
 	for _, c := range n.Children {
+		if lowFilter != "" && !strings.Contains(strings.ToLower(c.Name), lowFilter) {
+			continue
+		}
 		items = append(items, item{
 			name: c.Name, isDir: true, size: c.Disk,
 			files: c.Files, dirs: c.Dirs, node: c,
@@ -29,6 +33,9 @@ func buildItems(n *scanner.Node, sortBy string) []item {
 	}
 	for i := range n.FileEntries {
 		f := &n.FileEntries[i]
+		if lowFilter != "" && !strings.Contains(strings.ToLower(f.Name), lowFilter) {
+			continue
+		}
 		items = append(items, item{name: f.Name, size: f.Disk, files: 1, entry: f})
 	}
 

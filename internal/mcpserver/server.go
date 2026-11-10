@@ -228,8 +228,8 @@ func newServer() *mcp.Server {
 		if err != nil {
 			return nil, deleteResult{}, errors.New("invalid path: " + a.Path)
 		}
-		if why := refuseReason(root); why != "" {
-			return nil, deleteResult{}, errors.New(why)
+		if err := recycle.Guard(root); err != nil {
+			return nil, deleteResult{}, err
 		}
 		if _, err := os.Stat(root); err != nil {
 			return nil, deleteResult{}, errors.New("cannot read " + root + ": " + err.Error())
@@ -261,24 +261,6 @@ func newServer() *mcp.Server {
 	})
 
 	return server
-}
-
-// refuseReason protects system-critical paths from delete_to_recycle.
-func refuseReason(abs string) string {
-	low := strings.ToLower(filepath.Clean(abs))
-	// Drive roots: "C:", "C:\\" -> volume name equals the whole path.
-	if trimmed := strings.TrimRight(low, "\\"); strings.ContainsAny(trimmed, ":") {
-		if vol := strings.ToLower(filepath.VolumeName(trimmed)); vol != "" && trimmed == vol {
-			return "refusing to delete a drive root: " + abs
-		}
-	}
-	segs := strings.Split(low, "\\")
-	for _, s := range segs[1:] {
-		if s == "windows" || s == "system volume information" || s == ".git" {
-			return "refusing to touch a protected path: " + abs
-		}
-	}
-	return ""
 }
 
 const defaultLimit = 20

@@ -1,7 +1,7 @@
 // Package tui implements an ncdu-style interactive browser on top of the
-// scanner: live scan progress, arrow/vim navigation, size bars, sorting.
-// Read-only by design; deletion lives in the MCP tools and will arrive here
-// behind a confirmation prompt.
+// scanner: live scan progress (esc stops it early and keeps what was found),
+// arrow/vim navigation, sorting, filtering, and delete-to-Recycle-Bin behind
+// an explicit confirmation prompt.
 package tui
 
 import (
@@ -13,12 +13,13 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"disklens/internal/recycle"
 	"disklens/internal/scanner"
 )
 
 // Run scans startDir (with live progress) and opens the interactive browser.
 func Run(startDir string) error {
-	m := &model{startDir: startDir, sortBy: "size", scanning: true}
+	m := &model{startDir: startDir, sortBy: "size", scanning: true, cancel: make(chan struct{})}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	m.p = p
 	_, err := p.Run()
@@ -32,6 +33,20 @@ type scanDoneMsg struct {
 	err  error
 }
 
+type deleteDoneMsg struct {
+	parent *scanner.Node
+	name   string
+	path   string
+	err    error
+}
+
+// confirmState is a pending "move to Recycle Bin?" prompt for one item.
+type confirmState struct {
+	item   item
+	parent *scanner.Node
+	path   string
+}
+
 type model struct {
 	startDir string
 	p        *tea.Program
@@ -42,21 +57,30 @@ type model struct {
 	cursor int
 	offset int
 	sortBy string // size | name | files
+	filter string
+	typing bool
+
+	cancel   chan struct{}
+	canceled bool
+
+	scanning bool
+	stats    scanner.ProgressState
+	confirm  *confirmState
+	errLine  error
+	err      error
 
 	width, height int
-	scanning      bool
-	stats         scanner.ProgressState
-	err           error
 }
 
 var (
-	headerStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	selected        = lipgloss.NewStyle().Background(lipgloss.Color("237"))
-	dimStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	fileStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	errStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	warnStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	barFill, barGap = "█", "░"
+	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	selected    = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	fileStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	barFill     = "█"
+	barGap      = "░"
 )
 
 func (m *model) Init() tea.Cmd {
@@ -65,6 +89,7 @@ func (m *model) Init() tea.Cmd {
 		opts := scanner.Options{
 			DiskUsage: true,
 			KeepFiles: true,
+			Cancel:    m.cancel,
 			Progress: func(s scanner.ProgressState) {
 				if time.Since(last) < 120*time.Millisecond {
 					return
@@ -93,39 +118,119 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.root = msg.root
 		m.stack = []*scanner.Node{msg.root}
 		m.rebuild()
-	case tea.KeyMsg:
-		if m.err != nil {
-			return m, tea.Quit
+	case deleteDoneMsg:
+		m.confirm = nil
+		if msg.err != nil {
+			m.errLine = msg.err
+			return m, nil
 		}
+		scanner.RemoveChild(msg.parent, msg.name)
+		scanner.Reaggregate(m.root)
+		m.rebuild()
+		m.errLine = fmt.Errorf("moved to Recycle Bin: %s", msg.name)
+	case tea.KeyMsg:
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.err != nil {
+		return m, tea.Quit
+	}
+	if m.confirm != nil {
+		switch msg.String() {
+		case "y", "Y":
+			c := m.confirm
+			if err := recycle.Guard(c.path); err != nil {
+				m.confirm = nil
+				m.errLine = err
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				return deleteDoneMsg{parent: c.parent, name: c.item.name, path: c.path, err: recycle.ToRecycleBin(c.path)}
+			}
+		default: // n, N, esc, q, anything else: cancel
+			m.confirm = nil
+			return m, nil
+		}
+	}
+	if m.typing {
+		switch msg.String() {
+		case "esc":
+			m.typing, m.filter = false, ""
+			m.rebuild()
+		case "enter":
+			m.typing = false
+		case "backspace":
+			r := []rune(m.filter)
+			if len(r) > 0 {
+				m.filter = string(r[:len(r)-1])
+			}
+			m.rebuild()
+		default:
+			if len(msg.Runes) > 0 {
+				m.filter += string(msg.Runes)
+				m.rebuild()
+			}
+		}
+		return m, nil
+	}
+	if m.scanning {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
+		case "esc":
+			if !m.canceled {
+				m.canceled = true
+				close(m.cancel)
 			}
-		case "down", "j":
-			if m.cursor < len(m.items)-1 {
-				m.cursor++
-			}
-		case "enter", "right", "l":
-			m.enterCurrent()
-		case "esc", "left", "h":
-			if len(m.stack) > 1 {
-				m.stack = m.stack[:len(m.stack)-1]
-				m.rebuild()
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.items)-1 {
+			m.cursor++
+		}
+	case "enter", "right", "l":
+		m.enterCurrent()
+	case "esc", "left", "h":
+		if len(m.stack) > 1 {
+			m.stack = m.stack[:len(m.stack)-1]
+			m.rebuild()
+		} else {
+			return m, tea.Quit
+		}
+	case "s":
+		m.sortBy = "size"
+		m.rebuild()
+	case "n":
+		m.sortBy = "name"
+		m.rebuild()
+	case "c":
+		m.sortBy = "files"
+		m.rebuild()
+	case "/":
+		m.typing = true
+		m.filter = ""
+		m.rebuild()
+	case "d":
+		if len(m.items) > 0 {
+			it := m.items[m.cursor]
+			path := ""
+			if it.isDir && it.node != nil {
+				path = it.node.Path
 			} else {
-				return m, tea.Quit
+				path = filepath.Join(m.current().Path, it.name)
 			}
-		case "s":
-			m.sortBy = "size"
-			m.rebuild()
-		case "n":
-			m.sortBy = "name"
-			m.rebuild()
-		case "c":
-			m.sortBy = "files"
-			m.rebuild()
+			m.confirm = &confirmState{item: it, parent: m.current(), path: path}
 		}
 	}
 	return m, nil
@@ -145,7 +250,7 @@ func (m *model) enterCurrent() {
 }
 
 func (m *model) rebuild() {
-	m.items = buildItems(m.current(), m.sortBy)
+	m.items = buildItems(m.current(), m.sortBy, m.filter)
 	m.cursor, m.offset = 0, 0
 }
 
@@ -154,19 +259,35 @@ func (m *model) View() string {
 		return errStyle.Render("disklens: "+m.err.Error()) + "\n\npress q to quit\n"
 	}
 	if m.scanning {
-		return headerStyle.Render("disklens scanning "+m.startDir) + "\n\n" +
-			fmt.Sprintf("  %s dirs scanned, %s files, %s so far…\n\n",
-				humanInt(m.stats.DirsDone), humanInt(m.stats.Files), humanSize(m.stats.Bytes)) +
-			dimStyle.Render("esc or q stops early? not yet — v0 waits for the scan") + "\n"
+		var b strings.Builder
+		b.WriteString(headerStyle.Render("disklens scanning "+m.startDir) + "\n\n")
+		b.WriteString(fmt.Sprintf("  %s dirs scanned, %s files, %s so far\n\n",
+			humanInt(m.stats.DirsDone), humanInt(m.stats.Files), humanSize(m.stats.Bytes)))
+		if m.canceled {
+			b.WriteString(dimStyle.Render("stopping… keeping what was found so far") + "\n")
+		} else {
+			b.WriteString(dimStyle.Render("esc = stop early and browse what was found  q = quit") + "\n")
+		}
+		return b.String()
 	}
 
 	cur := m.current()
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(filepath.Base(filepath.Clean(cur.Path))+" — "+humanSize(cur.Disk)) +
-		dimStyle.Render("  [sort: "+m.sortBy+"]") + "\n")
+	title := filepath.Base(filepath.Clean(cur.Path)) + " — " + humanSize(cur.Disk)
+	if m.canceled {
+		title += " (partial scan)"
+	}
+	b.WriteString(headerStyle.Render(title) + dimStyle.Render("  [sort: "+m.sortBy+"]") + "\n")
 	b.WriteString(dimStyle.Render(cur.Path) + "\n")
+	if m.filter != "" {
+		f := m.filter
+		if m.typing {
+			f += "…"
+		}
+		b.WriteString(dimStyle.Render("filter: "+f) + "\n")
+	}
 
-	rows := m.height - 5
+	rows := m.height - 6
 	if rows < 1 {
 		rows = 1
 	}
@@ -200,11 +321,27 @@ func (m *model) View() string {
 		b.WriteString(marker + line + "\n")
 	}
 	if len(m.items) == 0 {
-		b.WriteString(dimStyle.Render("  (empty)") + "\n")
+		if m.filter != "" {
+			b.WriteString(dimStyle.Render("  (no matches)") + "\n")
+		} else {
+			b.WriteString(dimStyle.Render("  (empty)") + "\n")
+		}
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("↑↓ navigate  enter open dir  h/esc parent  s size  n name  c count  q quit") + "\n")
+	switch {
+	case m.confirm != nil:
+		b.WriteString(warnStyle.Render(fmt.Sprintf("move %q (%s) to the Recycle Bin?  [y] yes  [any other key] cancel",
+			m.confirm.item.name, humanSize(m.confirm.item.size))) + "\n")
+		b.WriteString(dimStyle.Render("recoverable — the item can be restored from the Recycle Bin") + "\n")
+	case m.typing:
+		b.WriteString(dimStyle.Render("type to filter  enter keeps filter  esc clears it") + "\n")
+	default:
+		if m.errLine != nil {
+			b.WriteString(warnStyle.Render(m.errLine.Error()) + "\n")
+		}
+		b.WriteString(dimStyle.Render("↑↓ navigate  enter open  h/esc parent  / filter  s/n/c sort  d recycle  q quit") + "\n")
+	}
 	return b.String()
 }
 
