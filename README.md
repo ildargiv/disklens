@@ -1,0 +1,38 @@
+# disklens
+
+Fast, modern disk usage analyzer — **built for Windows first**, written in Go.
+
+An ncdu/du-style tool, but designed for how Windows actually behaves:
+junctions and reparse points never cause loops or double counting, inaccessible
+directories (`ACCESS_DENIED`) are reported instead of silently skipped, and
+(roadmap) deletions only ever go to the Recycle Bin.
+
+> Status: work in progress. Current state and full roadmap: [PLAN.md](PLAN.md).
+
+## Usage (current)
+
+```
+go build ./cmd/disklens
+disklens C:\Users\you\Desktop            # scan and show top level
+disklens --depth 2 --top 10 .            # two levels, 10 largest per level
+disklens --workers 16 --ascii <dir>
+```
+
+## Roadmap (short)
+
+1. ✅ parallel BFS scanner core, Windows reparse-point handling
+2. non-interactive CLI modes + ncdu-compatible JSON export/import
+3. **MCP server (`disklens mcp`)** — tools for AI agents: scan/top/classify/
+   delete-to-recycle; the agent decides, disklens measures and executes safely
+4. TUI (navigation, sorting, live scan progress)
+5. Windows trump cards: Recycle Bin size + cleanup, cleanup projections
+   (caches, Temp, node_modules), duplicate candidates for photo archives
+
+## Why
+
+`ncdu` (2006, C→Zig) and its rewrite crowd (gdu, dust, dua, pdu) are all
+unix-first. On Windows there is no good modern analyzer: TreeSize/SpaceSniffer
+are old, single-threaded and closed-source. disklens fills that gap and adds an
+AI-agent layer nobody else has.
+
+MIT licensed.
