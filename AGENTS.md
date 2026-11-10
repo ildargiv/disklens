@@ -12,6 +12,8 @@ Guide for AI agents (coding agents and MCP-tool agents).
   and bubbletea+lipgloss (TUI); keep scanner allocation-light;
   Windows semantics are first-class (reparse points must never be descended; inaccessible
   directories are errors reported as data, never swallowed).
+- Version lives in `internal/buildinfo.Version` (default `0.1.0-dev`); release builds stamp it
+  with `-ldflags "-X disklens/internal/buildinfo.Version=<tag>"` (the release workflow does this).
 - Never introduce destructive behavior into scan paths. The only planned mutation tool is
   delete-to-Recycle-Bin, gated behind an explicit `confirm` argument.
 
