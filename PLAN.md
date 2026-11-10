@@ -21,14 +21,15 @@ TUI, designed *для Windows* с самого начала (junctions, корз
 - `go build` / `go test` зелёные.
 - Критерий: рабочий бинарник, печатает размеры верхнего уровня папки.
 
-### Этап 1 — Ядро: параллельный сканер (~1–2 недели)
+### Этап 1 — Ядро: параллельный сканер ✅
 - BFS-скан, worker pool, корректная агрегация размеров/счётчиков.
 - Windows-специфика (часть уже в v0):
   - пропуск junction/reparse points (не зацикливаться, не двойной подсчёт);
   - пропуск directory symlinks; длинные пути `\\?\`;
   - `ACCESS_DENIED` → помеченная ошибка, скан продолжается;
   - размер "на диске" (GetCompressedFileSize) vs apparent — отдельный режим.
-- Hard links: считать один раз (по volume+file-id, x/sys/windows).
+- Hard links: считать один раз (по volume+file-id, x/sys/windows) — 🚧 отложено (наш профиль
+  фото/кэшей почти не содержит hard links; перенесено в этап 5).
 - Тесты: go test + `-race`, табличные тесты размеров/счётчиков.
 - Критерий: на 90k+ файлов сканер не уступает gdu/dust в hyperfine на HDD/SSD;
   отдельный прогон на медиа-архивах (много больших файлов — наш профиль).
@@ -44,7 +45,7 @@ TUI, designed *для Windows* с самого начала (junctions, корз
 ### Этап 2.5 — MCP-сервер (`disklens mcp`) ✅
 
 Все 7 инструментов: `scan` / `top` / `children` / `du` / `classify` / `delete_to_recycle` /
-`empty_recycle_bin`. Корзина Windows через SHFileOperationW (FOF_ALLOWUNDO) + SHEmptyRecycleBinW.
+`empty_recycle_bin` (на этапе 4 добавились `recycle_bin` и `duplicates` — всего 9). Корзина Windows через SHFileOperationW (FOF_ALLOWUNDO) + SHEmptyRecycleBinW.
 classify: контекстно-маркерные правила (node_modules safe только рядом с package.json и т.п.),
 протестирован на реальном дереве (1.1 GB safe-кандидатов у пользователя).
 Safety: confirm-гейты, отказ на корнях дисков/system/.git (тест поймал слабую проверку — усилен
@@ -57,14 +58,20 @@ bubbletea+lipgloss: live-прогресс (Progress callback + throttle), **esc 
 (scanner.RemoveChild + Reaggregate для корректных итогов; Guard через recycle.Guard — тот же,
 что у MCP). `--no-tui`/pipe/--summarize сохраняют plain-вывод.
 
-### Этап 4 — Фичи-козыри (Windows-first) (~1 неделя)
-- Размер корзины как отдельная строка + "очистить корзину".
-- Cleanup projections: подсветка безопасных кандидатов — кэши (npm, pip, uv, NuGet,
-  браузерные), Temp, node_modules рядом с package.json, build/target;
-  "посмотреть сначала" — установщики, архивы фото.
-- Репорты дубликатов-близнецов (по размеру+mtime, позже по hash) — полезно для фото-архивов.
-- Цвет по типам файлов (медиа/архив/код).
-- Критерий: то, чего нет ни у ncdu, ни у gdu на Windows.
+### Этап 4 — Фичи-козыри (Windows-first) ✅ (кроме цветовой маркировки типов)
+- **Корзина как отдельная строка:** `recycle.Query` (SHQueryRecycleBinW; пустая корзина =
+  S_FALSE/ERROR_NO_MORE_FILES, а не ошибка) → статус-строка в TUI (`Recycle Bin: X GiB, N items`),
+  **x = очистить корзину** с явным PERMANENT-предупреждением и y-подтверждением; MCP-инструмент
+  `recycle_bin`. После удаления/очистки TUI мгновенно переопрашивает корзину.
+- **classify-правила под ML-профиль** ( motivated реальным сканом: Comfy-Desktop = 108 GB):
+  новый контекстный признак `pathAny` — `models`/`checkpoints`/`custom_nodes`/`input`
+  классифицируются только рядом с comfy/ollama/huggingface/stable-diffusion/... (review_first,
+  не safe); игровая папка `MyGame\models` не ложно срабатывает (тест).
+- **Дубликаты-близнецы:** `internal/dupes` — группы файлов с одинаковым apparent size,
+  сортировка по бесполезным GB, пропуск `.git`; `FileEntry.MTime` собран наготове для
+  следующего шага (hash-верификация позже). MCP-инструмент `duplicates` (кандидаты по размеру,
+  не подтверждённые копии).
+- Цвет по типам файлов — 🚧 отложено до этапа 5.
 
 ### Этап 5 — Дизайн, документация, релиз (~1 неделя)
 - README: скринкаст (VHS gif), hyperfine-таблица vs ncdu/du/gdu/dust/dua.

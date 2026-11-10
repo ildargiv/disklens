@@ -34,6 +34,9 @@ type rule struct {
 	// these files for the rule to apply (context check, e.g. node_modules
 	// only counts as safe next to a package.json).
 	markers []string
+	// pathAny: if non-empty, the lowercase full path must contain at least one
+	// of these substrings (context check for generic directory names).
+	pathAny []string
 	// never: subtree is skipped entirely and never reported.
 	never bool
 }
@@ -65,6 +68,19 @@ var rules = []rule{
 	{name: "npm-cache", category: "npm cache", status: "safe", hint: "re-downloaded on demand (npm cache)"},
 	{name: "pip", category: "pip cache", status: "safe",
 		hint: "re-downloaded on demand (pip cache); only counts under an AppData\\Local\\pip path"},
+
+	// ML tooling: model files are big and re-downloadable, but which ones the
+	// user still needs is a judgement call — always review_first.
+	{name: "models", category: "ml models", status: "review_first",
+		hint:    "large model files; re-downloadable but verify which ones you still need",
+		pathAny: []string{"comfy", "ollama", "llama", "huggingface", "stable-diffusion", "sd-webui", "a1111", "gpt4all", "text-generation-webui", "koboldcpp"}},
+	{name: "checkpoints", category: "ml checkpoints", status: "review_first",
+		hint:    "training checkpoints / model weights; verify before deleting",
+		pathAny: []string{"comfy", "ollama", "llama", "huggingface", "stable-diffusion", "sd-webui", "a1111"}},
+	{name: "custom_nodes", category: "comfyui extensions", status: "review_first",
+		hint: "ComfyUI custom nodes; reinstallable but may hold local state", pathAny: []string{"comfy"}},
+	{name: "input", category: "comfyui input", status: "review_first",
+		hint: "ComfyUI input images; usually copies of your own photos", pathAny: []string{"comfy"}},
 }
 
 // Classify walks root's subtree (root itself is not reported) and returns
@@ -106,6 +122,19 @@ func ruleFor(lowName, dirPath string) *rule {
 		// "pip" is only the pip cache when it lives in an AppData\Local\pip shape.
 		if r.name == "pip" && !strings.Contains(strings.ToLower(dirPath), "appdata\\local\\pip") {
 			return nil
+		}
+		if len(r.pathAny) > 0 {
+			low := strings.ToLower(dirPath)
+			hit := false
+			for _, s := range r.pathAny {
+				if strings.Contains(low, s) {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				return nil
+			}
 		}
 		return r
 	}

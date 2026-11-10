@@ -38,11 +38,13 @@ Connect it like any MCP server, e.g.:
 
 1. ✅ parallel BFS scanner core, Windows reparse-point handling
 2. ✅ non-interactive CLI modes + ncdu-compatible JSON export/import
-3. ✅ MCP server: `scan`/`top`/`children`/`du`/`classify`/`delete_to_recycle`/`empty_recycle_bin`
+3. ✅ MCP server (9 tools): `scan`/`top`/`children`/`du`/`classify`/`duplicates`/
+   `recycle_bin`/`delete_to_recycle`/`empty_recycle_bin`
 4. ✅ TUI: live progress, esc early-stop, vim navigation, sorting, filter `/`,
    delete-to-Recycle-Bin with confirmation
-5. Windows trump cards: Recycle Bin size + cleanup, cleanup projections
-   (caches, Temp, node_modules), duplicate candidates for photo archives
+5. ✅ Windows trump cards: Recycle Bin status line + `x` empty-bin flow (TUI and MCP),
+   cleanup rules incl. ML/comfy model directories, size-grouped duplicate candidates
+6. Release: benchmark table, screencast, GitHub Actions, winget/scoop
 
 ## Why
 

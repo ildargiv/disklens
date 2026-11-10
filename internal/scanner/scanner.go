@@ -54,6 +54,7 @@ type FileEntry struct {
 	Name     string
 	Apparent int64 // lstat st_size
 	Disk     int64 // on-disk size; valid only when Options.DiskUsage was set
+	MTime    int64 // last modification, Unix milliseconds
 }
 
 // Node is one directory in the scanned tree.
@@ -215,7 +216,7 @@ func (s *scanState) scanOne(n *Node) {
 				n.directDisk += disk
 				if s.opt.KeepFiles {
 					n.FileEntries = append(n.FileEntries, FileEntry{
-						Name: e.Name(), Apparent: info.Size(), Disk: disk,
+						Name: e.Name(), Apparent: info.Size(), Disk: disk, MTime: info.ModTime().UnixMilli(),
 					})
 				}
 			}

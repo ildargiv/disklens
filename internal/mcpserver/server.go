@@ -19,6 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"disklens/internal/cleanup"
+	"disklens/internal/dupes"
 	"disklens/internal/recycle"
 	"disklens/internal/scanner"
 )
@@ -260,6 +261,53 @@ func newServer() *mcp.Server {
 		return nil, emptyResult{Emptied: true, Warning: "Recycle Bin contents are now permanently gone"}, nil
 	})
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "recycle_bin",
+		Description: "Size and item count currently sitting in the Windows Recycle Bin (default root drive). Pair with empty_recycle_bin (permanent) after asking the user.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, a struct{}) (*mcp.CallToolResult, recycleResult, error) {
+		q, err := recycle.Query()
+		if err != nil {
+			return nil, recycleResult{}, err
+		}
+		return nil, recycleResult{SizeBytes: q.SizeBytes, Items: q.Items, Note: "size is what emptying the bin would free"}, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "duplicates",
+		Description: "Probable duplicate files in a cached scan: groups of 2+ files with identical apparent size, " +
+			"biggest waste first. CANDIDATES only (not hash-verified) — confirm before deleting anything. Requires a prior scan().",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, a struct {
+		Path    string `json:"path" jsonschema:"directory previously covered by a scan"`
+		MinSize int64  `json:"min_size_bytes,omitempty" jsonschema:"minimum file size, default 5242880 (5 MiB)"`
+		Limit   int    `json:"limit,omitempty" jsonschema:"max groups returned, default 20"`
+	}) (*mcp.CallToolResult, duplicatesResult, error) {
+		root, err := filepath.Abs(a.Path)
+		if err != nil {
+			return nil, duplicatesResult{}, errors.New("invalid path: " + a.Path)
+		}
+		n, ok := c.find(root)
+		if !ok {
+			return nil, duplicatesResult{}, errors.New("path is not covered by a cached scan; call scan() first: " + root)
+		}
+		minBytes := a.MinSize
+		if minBytes <= 0 {
+			minBytes = 5 << 20
+		}
+		limit := a.Limit
+		if limit <= 0 {
+			limit = 20
+		}
+		groups := dupes.Find(n, minBytes, limit)
+		var waste int64
+		for _, g := range groups {
+			waste += g.Waste
+		}
+		return nil, duplicatesResult{
+			Path: n.Path, MinSizeBytes: minBytes, Groups: groups, TotalWasteBytes: waste,
+			Note: "size-based candidates; verify by mtime/hash before delete_to_recycle",
+		}, nil
+	})
+
 	return server
 }
 
@@ -298,6 +346,20 @@ type deleteResult struct {
 type emptyResult struct {
 	Emptied bool   `json:"emptied"`
 	Warning string `json:"warning"`
+}
+
+type recycleResult struct {
+	SizeBytes int64  `json:"size_bytes"`
+	Items     int64  `json:"items"`
+	Note      string `json:"note"`
+}
+
+type duplicatesResult struct {
+	Path            string        `json:"path"`
+	MinSizeBytes    int64         `json:"min_size_bytes"`
+	Groups          []dupes.Group `json:"groups"`
+	TotalWasteBytes int64         `json:"total_waste_bytes"`
+	Note            string        `json:"note"`
 }
 
 type entry struct {

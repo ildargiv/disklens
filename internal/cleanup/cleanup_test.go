@@ -75,3 +75,59 @@ func TestClassify(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyMLRules(t *testing.T) {
+	// Synthetic tree: generic names like "models" must only classify when the
+	// full path looks like ML tooling (pathAny context check).
+	root := &scanner.Node{
+		Name: "Pod", Path: `C:\Users\Pod`,
+		Children: []*scanner.Node{
+			{Name: "Comfy-Desktop", Path: `C:\Users\Pod\Comfy-Desktop`, Children: []*scanner.Node{
+				{Name: "ComfyUI", Path: `C:\Users\Pod\Comfy-Desktop\ComfyUI`, Children: []*scanner.Node{
+					{Name: "models", Path: `C:\Users\Pod\Comfy-Desktop\ComfyUI\models`, Disk: 90 << 30, Files: 40},
+					{Name: "custom_nodes", Path: `C:\Users\Pod\Comfy-Desktop\ComfyUI\custom_nodes`, Disk: 2 << 30},
+					{Name: "input", Path: `C:\Users\Pod\Comfy-Desktop\ComfyUI\input`, Disk: 1 << 30},
+				}},
+			}},
+			{Name: "AppData", Path: `C:\Users\Pod\AppData`, Children: []*scanner.Node{
+				{Name: "ollama", Path: `C:\Users\Pod\AppData\ollama`, Children: []*scanner.Node{
+					{Name: "models", Path: `C:\Users\Pod\AppData\ollama\models`, Disk: 20 << 30},
+				}},
+			}},
+			// A game's "models" directory must NOT be treated as ML models.
+			{Name: "MyGame", Path: `C:\Users\Pod\MyGame`, Children: []*scanner.Node{
+				{Name: "models", Path: `C:\Users\Pod\MyGame\models`, Disk: 3 << 30, Children: []*scanner.Node{
+					{Name: "checkpoints", Path: `C:\Users\Pod\MyGame\models\checkpoints`, Disk: 1 << 30},
+				}},
+			}},
+		},
+	}
+
+	got := Classify(root)
+	status := map[string]string{}
+	for _, c := range got {
+		status[c.Path] = c.Status
+	}
+	want := map[string]string{
+		`C:\Users\Pod\Comfy-Desktop\ComfyUI\models`:       "review_first",
+		`C:\Users\Pod\Comfy-Desktop\ComfyUI\custom_nodes`: "review_first",
+		`C:\Users\Pod\Comfy-Desktop\ComfyUI\input`:        "review_first",
+		`C:\Users\Pod\AppData\ollama\models`:              "review_first",
+	}
+	for path, w := range want {
+		if status[path] != w {
+			t.Errorf("%s: got %q, want %q (all: %+v)", path, status[path], w, got)
+		}
+	}
+	for _, bad := range []string{
+		`C:\Users\Pod\MyGame\models`,
+		`C:\Users\Pod\MyGame\models\checkpoints`,
+	} {
+		if _, found := status[bad]; found {
+			t.Errorf("%s must not be classified as ML (no ML context in path)", bad)
+		}
+	}
+	if len(status) != len(want) {
+		t.Errorf("unexpected candidate set: %+v", got)
+	}
+}

@@ -74,7 +74,7 @@ func TestToolsListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"scan": false, "top": false, "children": false, "du": false, "classify": false, "delete_to_recycle": false, "empty_recycle_bin": false}
+	want := map[string]bool{"scan": false, "top": false, "children": false, "du": false, "classify": false, "delete_to_recycle": false, "empty_recycle_bin": false, "recycle_bin": false, "duplicates": false}
 	for _, tl := range res.Tools {
 		want[tl.Name] = true
 	}
@@ -184,6 +184,52 @@ func TestClassifyTool(t *testing.T) {
 	}
 	if res.SafeDiskBytes < 1700 {
 		t.Errorf("SafeDiskBytes = %d, want >= 1700", res.SafeDiskBytes)
+	}
+}
+
+func TestDuplicatesTool(t *testing.T) {
+	root := t.TempDir()
+	mk := func(rel string, size int) {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("dup1.bin", 2000)
+	mk(filepath.Join("sub", "dup2.bin"), 2000)
+	mk("unique.bin", 1234)
+	mk(filepath.Join("tiny1"), 50)
+	mk(filepath.Join("sub", "tiny2"), 50) // below min_size, must be excluded
+
+	cs := newTestSession(t)
+	// before any scan, duplicates must fail gracefully
+	if _, isErr := call(t, cs, "duplicates", map[string]any{"path": root}); !isErr {
+		t.Error("duplicates without a prior scan must return a tool error")
+	}
+
+	if _, isErr := call(t, cs, "scan", map[string]any{"path": root}); isErr {
+		t.Fatal("scan failed")
+	}
+	txt, isErr := call(t, cs, "duplicates", map[string]any{"path": root, "min_size_bytes": 1000})
+	if isErr {
+		t.Fatalf("duplicates error: %s", txt)
+	}
+	var res duplicatesResult
+	if err := json.Unmarshal([]byte(txt), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Groups) != 1 {
+		t.Fatalf("groups = %+v, want exactly one (the 2000 B pair)", res.Groups)
+	}
+	g := res.Groups[0]
+	if g.Size != 2000 || g.Waste != 2000 || len(g.Paths) != 2 {
+		t.Errorf("group wrong: %+v", g)
+	}
+	if res.TotalWasteBytes != 2000 {
+		t.Errorf("total waste = %d, want 2000", res.TotalWasteBytes)
 	}
 }
 

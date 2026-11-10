@@ -7,7 +7,7 @@ Guide for AI agents (coding agents and MCP-tool agents).
 - Build: `go build ./...` · Test: `go test ./...` (no gcc needed; `-race` only in CI on Linux)
 - Layout: `cmd/disklens` CLI · `internal/scanner` parallel BFS scanner · `internal/ncdujson`
   ncdu JSON export/import · `internal/mcpserver` MCP stdio server · `internal/tui` browser
-  (bubbletea) · `internal/cleanup` classifier · `internal/recycle` Recycle Bin operations
+  (bubbletea) · `internal/cleanup` classifier · `internal/dupes` duplicate candidates · `internal/recycle` Recycle Bin operations
 - Rules: scanner/ncdujson/cleanup/recycle are stdlib-only; external deps are go-sdk (MCP)
   and bubbletea+lipgloss (TUI); keep scanner allocation-light;
   Windows semantics are first-class (reparse points must never be descended; inaccessible
@@ -26,6 +26,8 @@ Server: `disklens mcp` (stdio).
 | `children` | `path`, `limit`, `sort` (size/name/files) | direct children of any cached path |
 | `du` | `path` | totals for one path; instant from cache, else scanned on the fly |
 | `classify` | `path` | cleanup candidates from a cached scan: `safe` vs `review_first`, with `hint` how each is recreated |
+| `duplicates` | `path`, optional `min_size_bytes` (default 5 MiB), `limit` | probable duplicate files: groups of 2+ files with identical apparent size, biggest waste first. **Candidates only** (not hash-verified) |
+| `recycle_bin` | — | size and item count currently in the Windows Recycle Bin |
 | `delete_to_recycle` | `path`, `confirm:true` | moves the item to the Windows **Recycle Bin** (recoverable). Refuses drive roots, system dirs, `.git` |
 | `empty_recycle_bin` | `confirm:true` | PERMANENT. Call only after the user explicitly asked to empty it |
 
@@ -38,5 +40,7 @@ Contract:
   tool error explaining this — call `scan` and retry.
 - Junctions and directory symlinks are deliberately not scanned or counted (they would double-count).
 - Scans are cached server-side; re-`scan` a root to refresh. Prefer `du` for one-off questions.
+- `duplicates` groups files by identical apparent size only — results are candidates, not
+  confirmed copies. Verify (mtime, hash, or by eye) before calling `delete_to_recycle` on them.
 - Destructive contract: `delete_to_recycle` is the only deletion path and it is recoverable;
   never call `empty_recycle_bin` unless the user asked for it in so many words.

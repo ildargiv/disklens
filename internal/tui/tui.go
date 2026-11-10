@@ -40,12 +40,21 @@ type deleteDoneMsg struct {
 	err    error
 }
 
-// confirmState is a pending "move to Recycle Bin?" prompt for one item.
+// confirmState is a pending confirmation prompt: one item to the Recycle Bin,
+// or emptying the whole bin.
 type confirmState struct {
+	kind   string // "item" or "empty"
 	item   item
 	parent *scanner.Node
 	path   string
 }
+
+type recycleMsg struct {
+	info recycle.QueryInfo
+	err  error
+}
+
+type emptyDoneMsg struct{ err error }
 
 type model struct {
 	startDir string
@@ -69,6 +78,9 @@ type model struct {
 	errLine  error
 	err      error
 
+	recKnown bool
+	rec      recycle.QueryInfo
+
 	width, height int
 }
 
@@ -84,6 +96,10 @@ var (
 )
 
 func (m *model) Init() tea.Cmd {
+	return tea.Batch(m.scanCmd(), m.recycleCmd())
+}
+
+func (m *model) scanCmd() tea.Cmd {
 	return func() tea.Msg {
 		var last time.Time // touched only by this goroutine (the Progress callback)
 		opts := scanner.Options{
@@ -100,6 +116,13 @@ func (m *model) Init() tea.Cmd {
 		}
 		root, err := scanner.Scan(m.startDir, opts)
 		return scanDoneMsg{root: root, err: err}
+	}
+}
+
+func (m *model) recycleCmd() tea.Cmd {
+	return func() tea.Msg {
+		info, err := recycle.Query()
+		return recycleMsg{info: info, err: err}
 	}
 }
 
@@ -128,6 +151,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		scanner.Reaggregate(m.root)
 		m.rebuild()
 		m.errLine = fmt.Errorf("moved to Recycle Bin: %s", msg.name)
+		return m, m.recycleCmd()
+	case recycleMsg:
+		m.rec, m.recKnown, m.errLine = msg.info, msg.err == nil, nil
+	case emptyDoneMsg:
+		m.confirm = nil
+		if msg.err != nil {
+			m.errLine = msg.err
+			return m, nil
+		}
+		m.errLine = fmt.Errorf("Recycle Bin emptied")
+		return m, m.recycleCmd()
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -142,6 +176,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y":
 			c := m.confirm
+			if c.kind == "empty" {
+				m.confirm = nil
+				return m, func() tea.Msg { return emptyDoneMsg{err: recycle.EmptyRecycleBin()} }
+			}
 			if err := recycle.Guard(c.path); err != nil {
 				m.confirm = nil
 				m.errLine = err
@@ -230,7 +268,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				path = filepath.Join(m.current().Path, it.name)
 			}
-			m.confirm = &confirmState{item: it, parent: m.current(), path: path}
+			m.confirm = &confirmState{kind: "item", item: it, parent: m.current(), path: path}
+		}
+	case "x":
+		if m.recKnown {
+			m.confirm = &confirmState{kind: "empty"}
 		}
 	}
 	return m, nil
@@ -288,6 +330,9 @@ func (m *model) View() string {
 	}
 
 	rows := m.height - 6
+	if m.recKnown {
+		rows-- // footer carries an extra Recycle Bin status line
+	}
 	if rows < 1 {
 		rows = 1
 	}
@@ -330,6 +375,10 @@ func (m *model) View() string {
 
 	b.WriteString("\n")
 	switch {
+	case m.confirm != nil && m.confirm.kind == "empty":
+		b.WriteString(warnStyle.Render(fmt.Sprintf("PERMANENTLY destroy everything in the Recycle Bin?  (%s, %s items)",
+			humanSize(m.rec.SizeBytes), humanInt(m.rec.Items))) + "\n")
+		b.WriteString(warnStyle.Render("[y] EMPTY IT — files cannot be recovered afterwards  [any other key] cancel") + "\n")
 	case m.confirm != nil:
 		b.WriteString(warnStyle.Render(fmt.Sprintf("move %q (%s) to the Recycle Bin?  [y] yes  [any other key] cancel",
 			m.confirm.item.name, humanSize(m.confirm.item.size))) + "\n")
@@ -339,6 +388,13 @@ func (m *model) View() string {
 	default:
 		if m.errLine != nil {
 			b.WriteString(warnStyle.Render(m.errLine.Error()) + "\n")
+		}
+		if m.recKnown {
+			recLine := fmt.Sprintf("Recycle Bin: %s, %s items", humanSize(m.rec.SizeBytes), humanInt(m.rec.Items))
+			if m.rec.Items > 0 {
+				recLine += "  x = empty it"
+			}
+			b.WriteString(dimStyle.Render(recLine) + "\n")
 		}
 		b.WriteString(dimStyle.Render("↑↓ navigate  enter open  h/esc parent  / filter  s/n/c sort  d recycle  q quit") + "\n")
 	}

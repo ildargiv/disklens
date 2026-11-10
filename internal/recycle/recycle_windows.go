@@ -87,3 +87,34 @@ func EmptyRecycleBin() error {
 	}
 	return nil
 }
+
+// QueryInfo reports the current contents of the Recycle Bin.
+type QueryInfo struct {
+	SizeBytes int64 `json:"size_bytes"`
+	Items     int64 `json:"items"`
+}
+
+type shqueryrbinfo struct {
+	CbSize    uint32
+	SizeBytes int64
+	NumItems  int64
+}
+
+var procSHQueryRecycleBinW = shell32.NewProc("SHQueryRecycleBinW")
+
+// Query returns the size and item count of the Recycle Bin for the default
+// root (pszRootPath = NULL: the drive OpenCode/disklens runs on).
+func Query() (QueryInfo, error) {
+	info := shqueryrbinfo{CbSize: uint32(unsafe.Sizeof(shqueryrbinfo{}))}
+	r, _, e := procSHQueryRecycleBinW.Call(0, uintptr(unsafe.Pointer(&info)))
+	switch r {
+	case 0: // S_OK
+		return QueryInfo{SizeBytes: info.SizeBytes, Items: info.NumItems}, nil
+	case 1, 0x80070018: // S_FALSE / ERROR_NO_MORE_FILES: the bin is simply empty
+		return QueryInfo{}, nil
+	}
+	if e != nil {
+		return QueryInfo{}, fmt.Errorf("SHQueryRecycleBinW failed: %w", e)
+	}
+	return QueryInfo{}, fmt.Errorf("SHQueryRecycleBinW failed: 0x%x", r)
+}

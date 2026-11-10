@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 
+	"disklens/internal/recycle"
 	"disklens/internal/scanner"
 )
 
@@ -150,7 +151,7 @@ func TestConfirmFlow(t *testing.T) {
 	}
 	// protected path: guard must refuse before the recycle call
 	m2 := newBrowsedModel()
-	gitNode := &scanner.Node{Name: ".git", Path: "/t/.git", Disk: 10}
+	gitNode := &scanner.Node{Name: ".git", Path: `C:\t\.git`, Disk: 10}
 	m2.stack[0].Children = append(m2.stack[0].Children, gitNode)
 	m2.rebuild()
 	for i, it := range m2.items {
@@ -164,12 +165,54 @@ func TestConfirmFlow(t *testing.T) {
 	}
 	cmd := key(m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if cmd != nil {
-		if msg, ok := cmd().(deleteDoneMsg); ok && msg.err == nil {
-			t.Error("guard must refuse deleting .git before touching the Recycle Bin")
-		}
+		t.Error("guard must refuse deleting .git before touching the Recycle Bin")
+	}
+	if m2.errLine == nil {
+		t.Error("guard refusal should be reported to the user")
 	}
 	if m2.confirm != nil {
 		t.Error("confirm should be resolved after y attempt")
+	}
+}
+
+func TestRecycleBinStatusAndEmptyConfirm(t *testing.T) {
+	m := newBrowsedModel()
+	// x is inert until the bin status is known
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if m.confirm != nil {
+		t.Fatal("x should do nothing before the Recycle Bin status is known")
+	}
+	m.Update(recycleMsg{info: recycle.QueryInfo{SizeBytes: 1234, Items: 3}})
+	if !m.recKnown || m.rec.Items != 3 {
+		t.Fatalf("recycleMsg not applied: known=%v %+v", m.recKnown, m.rec)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Recycle Bin") || !strings.Contains(view, "x = empty it") {
+		t.Errorf("view should show Recycle Bin status line:\n%s", view)
+	}
+
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if m.confirm == nil || m.confirm.kind != "empty" {
+		t.Fatalf("x should open an empty-bin confirm: %+v", m.confirm)
+	}
+	view = m.View()
+	if !strings.Contains(view, "PERMANENTLY") {
+		t.Errorf("empty confirm must warn about permanent deletion:\n%s", view)
+	}
+	// any key cancels
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.confirm != nil {
+		t.Error("n should cancel the empty-bin prompt")
+	}
+	// y arms the command (we do NOT execute it: the test must never touch the
+	// real Recycle Bin), and the prompt resolves.
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	cmd := key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Error("y on empty-confirm should arm the empty-bin command")
+	}
+	if m.confirm != nil {
+		t.Error("confirm should resolve after y")
 	}
 }
 
