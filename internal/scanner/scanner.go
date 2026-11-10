@@ -185,5 +185,3 @@ func aggregate(n *Node) {
 		n.Errors += c.Errors
 	}
 }
-
-

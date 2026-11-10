@@ -41,26 +41,14 @@ TUI, designed *для Windows* с самого начала (junctions, корз
 - Реальный дисковый размер через GetCompressedFileSizeW (кластерный, с учётом сжатия NTFS).
 - Тесты: round-trip export→import, канонический пример из документации ncdu, garbage-input.
 
-### Этап 2.5 — MCP-сервер (`disklens mcp`) (~3–5 дней) ⭐ приоритет
+### Этап 2.5 — MCP-сервер (`disklens mcp`) — ядро готово ✅, хвост 🚧
 
-disklens как детерминированный слой данных + слой исполнения для AI-агентов
-(агент = «мозги» для решений, что безопасно удалить *этому* пользователю;
-disklens = точные факты и безопасное исполнение). SDK: официальный
-github.com/modelcontextprotocol/go-sdk (запасной: mark3labs/mcp-go).
-
-Инструменты (stdio, компактный JSON):
-- `scan(path, workers, follow_symlinks)` → сканирует дерево, кэширует на сервере,
-  возвращает корневую сводку (size/files/dirs/errors);
-- `top(path, n)` / `children(path, sort, limit)` → навигация по кэшированному скану;
-- `du(path)` → быстрый разовый замер без кэша;
-- `classify(path)` → cleanup-кандидаты: `safe` (кэши, Temp, node_modules рядом с
-  package.json) / `review_first` (архивы, установщики);
-- `delete_to_recycle(path)` → удаление **только в корзину Windows** с подтверждением;
-- `empty_recycle_bin()` → отдельное явное подтверждение;
-- `duplicates(scope, min_size)` → кандидаты по size+mtime (фото-архивы).
-
-Safety-модель для агентов: никаких прямых удалений; недоступные директории
-возвращаются как «unknowns», а не молча теряются. В репо: AGENTS.md + llms.txt.
+Инструменты `scan` / `top` / `children` / `du` работают: кэш сканов на сервере,
+структурированный вывод (structuredContent), stdio-рукопожатие проверено реальным
+JSON-RPC клиентом (initialize → tools/list → tools/call). Тесты: in-memory MCP-сессия.
+SDK: github.com/modelcontextprotocol/go-sdk v1.8 (tool errors возвращаем как `error` —
+SDK сам ставит isError; `mcp.NewToolResultError` в v1.8 нет).
+Осталось в этом этапе: `classify`, `delete_to_recycle` (COM Shell.Application), `empty_recycle_bin`.
 
 ### Этап 3 — TUI (~1–2 недели)
 - bubbles (или tcell) : навигация стрелками/vim-ключи, size bars, сортировка

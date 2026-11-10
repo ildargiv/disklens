@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -12,11 +13,19 @@ import (
 	"strings"
 	"time"
 
+	"disklens/internal/mcpserver"
 	"disklens/internal/ncdujson"
 	"disklens/internal/scanner"
 )
 
 func main() {
+	// Subcommand dispatch must happen before flag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := mcpserver.Run(context.Background(), os.Args[2:]); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	workers := flag.Int("workers", 0, "parallel scanning goroutines (default: number of CPUs)")
 	depth := flag.Int("depth", 1, "directory levels to display (0 = whole tree)")
 	top := flag.Int("top", 0, "show only the N largest children per level (0 = all)")
