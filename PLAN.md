@@ -73,10 +73,17 @@ bubbletea+lipgloss: live-прогресс (Progress callback + throttle), **esc 
   не подтверждённые копии).
 - Цвет по типам файлов — 🚧 отложено до этапа 5.
 
-### Этап 5 — Дизайн, документация, релиз (~1 неделя)
-- README: скринкаст (VHS gif), hyperfine-таблица vs ncdu/du/gdu/dust/dua.
-- GitHub Actions: cross-compile (windows/linux, amd64/arm64), winget/scoop/choco.
-- Конфиг-файл (~/.disklens.yaml), completions.
+### Этап 5 — Дизайн, документация, релиз 🚧
+- ✅ Бенчмарк: `scripts/bench.ps1` (gdu/dust/dua; ncdu не имеет нативной Windows-сборки) —
+  disklens быстрейший или паритетный во всех 4 сценариях, таблица в README.
+- ✅ CI: GitHub Actions — test (ubuntu+windows, `-race` на Linux) + release по тегу
+  (cross-compile windows/linux × amd64/arm64, version-стеймпинг через `internal/buildinfo`).
+- ✅ Версия: `disklens version` / `--version`, `-ldflags -X buildinfo.Version`.
+- ✅ Packaging-заготовки: `packaging/winget/` (portable-манифест) и `packaging/scoop/`
+  (с autoupdate) — PR в winget-pkgs после первого релиза.
+- 🚧 Скринкаст (VHS gif) в README.
+- Отложено до v0.2: конфиг-файл, shell completions, hard-link дедупликация,
+  hash-верификация дубликатов, цветовая маркировка типов файлов в TUI.
 - Критерий: публичный релиз v0.1.
 
 ## Технические решения

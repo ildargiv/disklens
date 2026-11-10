@@ -18,13 +18,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"disklens/internal/buildinfo"
 	"disklens/internal/cleanup"
 	"disklens/internal/dupes"
 	"disklens/internal/recycle"
 	"disklens/internal/scanner"
 )
-
-const version = "0.1.0"
 
 type scanEntry struct {
 	root      *scanner.Node
@@ -90,7 +89,7 @@ func Run(ctx context.Context, _ []string) error {
 func newServer() *mcp.Server {
 	c := &cache{}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "disklens", Version: version}, &mcp.ServerOptions{
+	server := mcp.NewServer(&mcp.Implementation{Name: "disklens", Version: buildinfo.Version}, &mcp.ServerOptions{
 		Instructions: "disklens measures disk usage in parallel. scan() caches a tree; " +
 			"top/children/du then query the cache without re-reading the disk. " +
 			"All sizes are in bytes; size_disk is cluster-accurate on Windows. " +

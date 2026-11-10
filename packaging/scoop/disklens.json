@@ -1,0 +1,29 @@
+{
+  "homepage": "https://github.com/ildargiv/disklens",
+  "license": "MIT",
+  "version": "0.1.0",
+  "description": "Fast parallel disk usage analyzer for Windows with TUI and an MCP server for AI agents",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/ildargiv/disklens/releases/download/v0.1.0/disklens-windows-amd64.exe",
+      "bin": "disklens-windows-amd64.exe"
+    },
+    "arm64": {
+      "url": "https://github.com/ildargiv/disklens/releases/download/v0.1.0/disklens-windows-arm64.exe",
+      "bin": "disklens-windows-arm64.exe"
+    }
+  },
+  "checkver": {
+    "github": "https://github.com/ildargiv/disklens"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/ildargiv/disklens/releases/download/v$version/disklens-windows-amd64.exe"
+      },
+      "arm64": {
+        "url": "https://github.com/ildargiv/disklens/releases/download/v$version/disklens-windows-arm64.exe"
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+# Winget manifest template. To publish: copy this into a PR to microsoft/winget-pkgs
+# under manifest/s/disklens/disklens/0.1.0/ (adjust the package identifier to the
+# final repo owner). Replace 0.1.0 in URLs with the release tag.
+PackageVersion: 0.1.0
+PackageIdentifier: ildargiv.disklens
+PackageUrl: https://github.com/ildargiv/disklens
+PackageName: disklens
+Publisher: ildargiv
+Author: ildargiv
+License: MIT
+LicenseUrl: https://github.com/ildargiv/disklens/blob/master/LICENSE
+ShortDescription: Fast parallel disk usage analyzer for Windows with TUI and MCP server for AI agents.
+Description: >
+  disklens is a modern Windows-first rewrite of ncdu/du: parallel BFS scanner,
+  ncdu-JSON import/export, interactive TUI, delete-to-Recycle-Bin only, and an
+  MCP server that exposes scans as tools for AI agents.
+Tags:
+  - disk-usage
+  - analyzer
+  - cli
+  - tui
+  - mcp
+FileExtensions:
+  - json
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/ildargiv/disklens/releases/download/v0.1.0/disklens-windows-amd64.exe
+    InstallerType: portable
+    InstallerSha256: # sha256 of the released exe (winget action computes it)
+    Files:
+      - Path: disklens.exe
+  - Architecture: Arm64
+    InstallerUrl: https://github.com/ildargiv/disklens/releases/download/v0.1.0/disklens-windows-arm64.exe
+    InstallerType: portable
+    InstallerSha256: # sha256 of the released exe (winget action computes it)
+    Files:
+      - Path: disklens.exe
+ManifestType: singleton
+ManifestVersion: 1.6.0

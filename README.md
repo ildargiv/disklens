@@ -1,13 +1,18 @@
 # disklens
 
+[![CI](https://github.com/ildargiv/disklens/actions/workflows/ci.yml/badge.svg)](https://github.com/ildargiv/disklens/actions/workflows/ci.yml)
+
 Fast, modern disk usage analyzer — **built for Windows first**, written in Go.
 
 An ncdu/du-style tool, but designed for how Windows actually behaves:
 junctions and reparse points never cause loops or double counting, inaccessible
 directories (`ACCESS_DENIED`) are reported instead of silently skipped, and
-(roadmap) deletions only ever go to the Recycle Bin.
+deletions only ever go to the Recycle Bin (recoverable, with confirmations in
+both the TUI and the MCP tools).
 
-> Status: work in progress. Current state and full roadmap: [PLAN.md](PLAN.md).
+It also speaks to AI agents: `disklens mcp` is an MCP server (9 tools) that
+exposes scans, cleanup classification, duplicate candidates and
+Recycle-Bin-safe deletion to agents like OpenCode, Claude or Cursor.
 
 ## Usage (current)
 
@@ -33,6 +38,25 @@ Connect it like any MCP server, e.g.:
   }
 }
 ```
+
+## Benchmarks
+
+Measured on a Windows 11 machine (ADATA NVMe), warm filesystem cache,
+apparent-size mode (`--apparent` / `-a` / `-s` / `-A`), 3 runs after 1 warmup
+(`scripts/bench.ps1`, results are min/mean/max of those runs). ncdu is not in
+the table because it has no native Windows build — the common way to run it on
+Windows is WSL, which is exactly the gap disklens fills.
+
+| scenario | disklens | dua | gdu | dust |
+|---|---|---|---|---|
+| node_modules (35 k files) | **0.12s** | 0.17s | 0.30s | 0.89s |
+| Desktop (photos + mixed, 72 GB) | **0.27s** | 0.34s | 0.53s | 1.95s |
+| Comfy-Desktop (ML model files) | **0.23s** | 0.22s | 0.38s | 1.88s |
+| AppData\Local (580 k tiny files, 160 GB) | **1.50s** | 1.68s | 2.76s | 12.50s |
+
+disklens is fastest or on par with the fastest tool in every scenario; it is
+consistently ~2x faster than gdu and 7–8x faster than dust on large trees.
+Reproduce with `powershell -File scripts/bench.ps1`.
 
 ## Roadmap (short)
 

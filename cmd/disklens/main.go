@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"disklens/internal/buildinfo"
 	"disklens/internal/mcpserver"
 	"disklens/internal/ncdujson"
 	"disklens/internal/scanner"
@@ -21,6 +22,10 @@ import (
 
 func main() {
 	// Subcommand dispatch must happen before flag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("disklens", buildinfo.Version)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		if err := mcpserver.Run(context.Background(), os.Args[2:]); err != nil {
 			fatal(err)
@@ -38,6 +43,7 @@ func main() {
 	exportPath := flag.String("o", "", "export the scan as ncdu-compatible JSON ('-' for stdout)")
 	importPath := flag.String("f", "", "import a scan from an ncdu/disklens JSON file instead of scanning")
 	noTUI := flag.Bool("no-tui", false, "print a plain tree instead of opening the interactive TUI")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	var (
 		root         *scanner.Node
 		err          error
@@ -53,6 +59,10 @@ func main() {
 	if rest := flag.Args(); len(rest) > 0 {
 		dirArg = &rest[0]
 		flag.CommandLine.Parse(rest[1:])
+	}
+	if *showVersion {
+		fmt.Println("disklens", buildinfo.Version)
+		return
 	}
 
 	// Interactive mode: a TTY, no import, not --summarize -> the TUI owns the scan.
