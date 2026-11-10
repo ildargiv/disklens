@@ -16,8 +16,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: gofmt check
+        if: matrix.os == 'ubuntu-latest'
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
-        shell: bash
       - run: go vet ./...
       - run: go build ./...
       - run: go test -count=1 ./...
