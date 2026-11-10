@@ -26,7 +26,7 @@ Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/ildargiv/disklens/releases/download/v0.1.0/disklens-windows-amd64.exe
     InstallerType: portable
-    InstallerSha256: # sha256 of the released exe (winget action computes it)
+    InstallerSha256: 04ccc4e4f0c1a7b04771609805c15ff9bbc34b5f49441821d13033b9e7343f77
     Files:
       - Path: disklens.exe
   - Architecture: Arm64
