@@ -178,6 +178,9 @@ func TestDeniedDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod-based denial does not work on Windows")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
 	root := buildTree(t)
 	denied := filepath.Join(root, "dir2")
 	if err := os.Chmod(denied, 0o000); err != nil {

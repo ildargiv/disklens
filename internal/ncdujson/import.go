@@ -43,6 +43,9 @@ func Import(r io.Reader) (*scanner.Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Totals are derived from the direct counters, exactly like a live scan,
+	// so imported trees stay consistent after edits (RemoveChild+Reaggregate).
+	scanner.Reaggregate(root)
 
 	t, err = dec.Token() // top-level closing ']'
 	if err != nil {
@@ -126,8 +129,7 @@ func parseDirBody(dec *json.Decoder, parent string) (*scanner.Node, error) {
 		n.Path = filepath.Join(parent, ib.Name)
 	}
 	if ib.ReadError {
-		n.HasError = true
-		n.Errors++
+		n.MarkReadError()
 	}
 
 	for dec.More() {
@@ -145,26 +147,13 @@ func parseDirBody(dec *json.Decoder, parent string) (*scanner.Node, error) {
 			if err != nil {
 				return nil, err
 			}
-			n.FileEntries = append(n.FileEntries, scanner.FileEntry{
-				Name: fb.Name, Apparent: fb.Asize, Disk: estimateDisk(fb),
-			})
-			n.Size += fb.Asize
-			n.Disk += estimateDisk(fb)
-			n.Files++
+			n.AddFile(scanner.FileEntry{Name: fb.Name, Apparent: fb.Asize, Disk: estimateDisk(fb)})
 		case '[': // subdirectory
 			c, err := parseDirBody(dec, n.Path)
 			if err != nil {
 				return nil, err
 			}
 			n.Children = append(n.Children, c)
-			n.Dirs += c.Dirs + 1
-			n.Size += c.Size
-			n.Disk += c.Disk
-			n.Files += c.Files
-			if c.HasError {
-				n.HasError = true
-			}
-			n.Errors += c.Errors
 		default:
 			return nil, fmt.Errorf("malformed ncdu export: unexpected %q in directory", d)
 		}

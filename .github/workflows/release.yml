@@ -1,7 +1,24 @@
 name: Release
+
+# Tag push (v1.2.3)  -> builds portable binaries + the Windows installer and
+#                       publishes them as a GitHub Release.
+# Pull request / manual run -> builds everything as workflow artifacts only
+#                       (download them from the run page to test the installer).
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "packaging/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -18,6 +35,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
+          NUM="$(echo "$V" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3.0/')"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "num=$NUM" >> "$GITHUB_OUTPUT"
+      - name: Windows resources (icon + version info)
+        if: matrix.goos == 'windows'
+        run: >
+          go run github.com/tc-hib/go-winres@v0.3.3 simply
+          --arch ${{ matrix.goarch }}
+          --out cmd/disklens/rsrc
+          --icon packaging/installer/disklens.ico
+          --manifest cli
+          --product-name "DiskLens by KopiTehnik"
+          --file-description "DiskLens by KopiTehnik - disk usage analyzer"
+          --product-version ${{ steps.v.outputs.num }}
+          --file-version ${{ steps.v.outputs.num }}
+          --copyright "KopiTehnik, MIT License"
+          --original-filename disklens.exe
       - name: build
         env:
           CGO_ENABLED: "0"
@@ -25,7 +64,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: >
           go build -trimpath
-          -ldflags "-s -w -X disklens/internal/buildinfo.Version=${GITHUB_REF_NAME}"
+          -ldflags "-s -w -X disklens/internal/buildinfo.Version=${{ steps.v.outputs.version }}"
           -o dist/disklens-${{ matrix.suffix }}${{ matrix.exe }}
           ./cmd/disklens
       - uses: actions/upload-artifact@v4
@@ -33,8 +72,66 @@ jobs:
           name: disklens-${{ matrix.suffix }}
           path: dist/
 
-  release:
+  installer:
     needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: disklens-windows-*
+          path: dist
+          merge-multiple: true
+      - name: version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
+          NUM="$(echo "$V" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3.0/')"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "num=$NUM" >> "$GITHUB_OUTPUT"
+      - name: install Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+      - name: build installer
+        shell: pwsh
+        run: |
+          & $env:ISCC /Qp "/DAppVersion=${{ steps.v.outputs.version }}" "/DAppNumVersion=${{ steps.v.outputs.num }}" "/DBinDir=..\..\dist" packaging\installer\disklens.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+      - name: smoke-test install, run, uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\DiskLens-Setup-*.exe | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP "DiskLensTest"
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$dir",'/TASKS=addtopath,contextmenu' -Wait -PassThru
+          if ($p.ExitCode) { throw "setup failed: $($p.ExitCode)" }
+          & "$dir\disklens.exe" version
+          if ($LASTEXITCODE) { throw "disklens version failed" }
+          & "$dir\disklens.exe" --no-tui --summarize $dir
+          if ($LASTEXITCODE) { throw "disklens scan failed" }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath -notlike "*$dir*") { throw "install dir was not added to the user PATH" }
+          if (-not (Test-Path 'HKCU:\Software\Classes\Directory\shell\DiskLens\command')) { throw "Explorer context menu missing" }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode) { throw "uninstall failed: $($p.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path "$dir\disklens.exe") { throw "uninstall left disklens.exe behind" }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath -like "*$dir*") { throw "uninstall did not clean the user PATH" }
+          if (Test-Path 'HKCU:\Software\Classes\Directory\shell\DiskLens') { throw "uninstall left the context menu" }
+          "installer smoke test passed"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiskLens-Setup
+          path: dist/DiskLens-Setup-*.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -43,7 +140,13 @@ jobs:
         with:
           path: dist-all
           merge-multiple: true
+      - name: checksums
+        run: cd dist-all && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
+          name: DiskLens by KopiTehnik ${{ github.ref_name }}
           files: dist-all/*
           generate_release_notes: true
+          body: |
+            **Windows:** download `DiskLens-Setup-*.exe` and run it (no admin rights needed; x64 and ARM64 in one installer).
+            Portable single-file builds: `disklens-windows-amd64.exe` / `disklens-windows-arm64.exe`. Checksums: `SHA256SUMS.txt`.

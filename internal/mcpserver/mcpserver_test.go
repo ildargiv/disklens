@@ -74,7 +74,7 @@ func TestToolsListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"scan": false, "top": false, "children": false, "du": false, "classify": false, "delete_to_recycle": false, "empty_recycle_bin": false, "recycle_bin": false, "duplicates": false}
+	want := map[string]bool{"scan": false, "top": false, "children": false, "du": false, "classify": false, "delete_to_recycle": false, "empty_recycle_bin": false, "recycle_bin": false, "duplicates": false, "largest_files": false}
 	for _, tl := range res.Tools {
 		want[tl.Name] = true
 	}
@@ -140,12 +140,52 @@ func TestScanTopChildrenDu(t *testing.T) {
 	}
 }
 
-func TestTopWithoutScanFailsGracefully(t *testing.T) {
+func TestTopScansOnDemand(t *testing.T) {
 	root := testTree(t)
 	cs := newTestSession(t)
 	txt, isErr := call(t, cs, "top", map[string]any{"path": root})
-	if !isErr {
-		t.Errorf("top on unscanned path should be a tool error, got: %s", txt)
+	if isErr {
+		t.Fatalf("top on an unscanned path should scan on demand, got error: %s", txt)
+	}
+	var res childrenResult
+	if err := json.Unmarshal([]byte(txt), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.AutoScanned || len(res.Entries) == 0 || res.Entries[0].Name != "large.bin" {
+		t.Errorf("unexpected on-demand result: %+v", res)
+	}
+	// a second call is answered from the cache
+	txt, _ = call(t, cs, "top", map[string]any{"path": root})
+	res = childrenResult{}
+	_ = json.Unmarshal([]byte(txt), &res)
+	if res.AutoScanned {
+		t.Error("second call should come from the cache")
+	}
+	// missing paths are still a clean tool error
+	if _, isErr := call(t, cs, "top", map[string]any{"path": filepath.Join(root, "nope")}); !isErr {
+		t.Error("missing path should be a tool error")
+	}
+}
+
+func TestLargestFiles(t *testing.T) {
+	root := testTree(t)
+	cs := newTestSession(t)
+	txt, isErr := call(t, cs, "largest_files", map[string]any{"path": root, "name": "*.BIN", "limit": 2})
+	if isErr {
+		t.Fatalf("largest_files error: %s", txt)
+	}
+	var res largestResult
+	if err := json.Unmarshal([]byte(txt), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Matched != 3 || len(res.Files) != 2 || filepath.Base(res.Files[0].Path) != "large.bin" {
+		t.Errorf("largest_files wrong: %+v", res)
+	}
+	txt, _ = call(t, cs, "largest_files", map[string]any{"path": root, "older_than_days": 1})
+	res = largestResult{}
+	_ = json.Unmarshal([]byte(txt), &res)
+	if res.Matched != 0 {
+		t.Errorf("fresh files must not match older_than_days: %+v", res)
 	}
 }
 
@@ -161,7 +201,7 @@ func TestClassifyTool(t *testing.T) {
 		}
 	}
 	mk("package.json", 10)
-	mk(filepath.Join("node_modules", "x.js"), 1500)
+	mk(filepath.Join("node_modules", "x.js"), 20000)
 	mk(filepath.Join("__pycache__", "z.pyc"), 200)
 
 	cs := newTestSession(t)
@@ -182,8 +222,8 @@ func TestClassifyTool(t *testing.T) {
 	if res.Candidates[0].Name != "node_modules" || res.Candidates[0].Status != "safe" {
 		t.Errorf("first candidate wrong: %+v", res.Candidates[0])
 	}
-	if res.SafeDiskBytes < 1700 {
-		t.Errorf("SafeDiskBytes = %d, want >= 1700", res.SafeDiskBytes)
+	if res.SafeDiskBytes < 20200 {
+		t.Errorf("SafeDiskBytes = %d, want >= 20200", res.SafeDiskBytes)
 	}
 }
 
@@ -205,14 +245,6 @@ func TestDuplicatesTool(t *testing.T) {
 	mk(filepath.Join("sub", "tiny2"), 50) // below min_size, must be excluded
 
 	cs := newTestSession(t)
-	// before any scan, duplicates must fail gracefully
-	if _, isErr := call(t, cs, "duplicates", map[string]any{"path": root}); !isErr {
-		t.Error("duplicates without a prior scan must return a tool error")
-	}
-
-	if _, isErr := call(t, cs, "scan", map[string]any{"path": root}); isErr {
-		t.Fatal("scan failed")
-	}
 	txt, isErr := call(t, cs, "duplicates", map[string]any{"path": root, "min_size_bytes": 1000})
 	if isErr {
 		t.Fatalf("duplicates error: %s", txt)
@@ -263,13 +295,26 @@ func TestDeleteToRecycleWorks(t *testing.T) {
 	if err := os.WriteFile(victim, []byte("throwaway"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "keeper.bin"), []byte("stays"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cs := newTestSession(t)
+	if _, isErr := call(t, cs, "scan", map[string]any{"path": root}); isErr {
+		t.Fatal("scan failed")
+	}
 	txt, isErr := call(t, cs, "delete_to_recycle", map[string]any{"path": victim, "confirm": true})
 	if isErr {
 		t.Fatalf("delete_to_recycle error: %s", txt)
 	}
 	if _, err := os.Stat(victim); !os.IsNotExist(err) {
 		t.Errorf("victim still on disk after delete_to_recycle: %v", err)
+	}
+	// the cached tree must reflect the deletion
+	txt, _ = call(t, cs, "children", map[string]any{"path": root})
+	var res childrenResult
+	_ = json.Unmarshal([]byte(txt), &res)
+	if res.AutoScanned || len(res.Entries) != 1 || res.Entries[0].Name != "keeper.bin" {
+		t.Errorf("cache not updated after delete: %+v", res)
 	}
 	fmt.Println("note: victim.bin is recoverable from the Windows Recycle Bin")
 }

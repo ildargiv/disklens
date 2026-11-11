@@ -1,4 +1,13 @@
+# build outputs
 /disklens
 /disklens.exe
 /disklens-next.exe
+/dist/
+/Output/
+*.exe~
+*~
+
+# scan exports (may contain private paths)
 *.json.gz
+/*.json
+*.syso
