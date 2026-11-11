@@ -35,7 +35,7 @@ func names(items []item) []string {
 }
 
 func TestBuildItemsSize(t *testing.T) {
-	got := names(buildItems(testRoot(), "size", ""))
+	got := names(buildItems(testRoot(), "size", "", false))
 	want := []string{"big", "rootfile.bin", "small"} // 5000 > 300 > 100, dirs+files mixed
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("size order = %v, want %v", got, want)
@@ -43,7 +43,7 @@ func TestBuildItemsSize(t *testing.T) {
 }
 
 func TestBuildItemsName(t *testing.T) {
-	got := names(buildItems(testRoot(), "name", ""))
+	got := names(buildItems(testRoot(), "name", "", false))
 	want := []string{"big", "small", "rootfile.bin"} // dirs first alphabetically, then files
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("name order = %v, want %v", got, want)
@@ -51,7 +51,7 @@ func TestBuildItemsName(t *testing.T) {
 }
 
 func TestBuildItemsFiles(t *testing.T) {
-	got := names(buildItems(testRoot(), "files", ""))
+	got := names(buildItems(testRoot(), "files", "", false))
 	want := []string{"big", "rootfile.bin", "small"} // files 2 > 1, ties by size
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("files order = %v, want %v", got, want)
@@ -99,11 +99,12 @@ func TestNavigation(t *testing.T) {
 		t.Errorf("esc failed: stack=%d", len(m.stack))
 	}
 
-	// esc at root quits
-	if cmd := key(m, tea.KeyMsg{Type: tea.KeyEsc}); cmd == nil {
-		t.Error("esc at root should return a quit command")
-	} else if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Error("esc at root should return QuitMsg")
+	// esc at root must NOT quit (an accidental key must not discard a scan)
+	if cmd := key(m, tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
+		t.Error("esc at root should not return a command")
+	}
+	if m.errLine == nil {
+		t.Error("esc at root should hint that q quits")
 	}
 }
 
@@ -232,5 +233,27 @@ func TestViewRendersRows(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestApparentToggleAndHelp(t *testing.T) {
+	m := newBrowsedModel()
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if !m.apparent || m.items[0].size != 4000 {
+		t.Errorf("a should switch to apparent sizes: apparent=%v first=%+v", m.apparent, m.items[0])
+	}
+	if m.cursor != 1 {
+		t.Errorf("toggling sizes must keep the cursor, got %d", m.cursor)
+	}
+	key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	if !m.help || !strings.Contains(m.View(), "Recycle Bin") {
+		t.Error("? should open the help overlay")
+	}
+	if cmd := key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}); cmd != nil || m.help {
+		t.Error("any key should close help without acting")
+	}
+	if !strings.Contains(m.View(), "KopiTehnik") {
+		t.Error("header should carry the product name")
 	}
 }

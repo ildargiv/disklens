@@ -83,7 +83,7 @@ func exportDir(w io.Writer, n *scanner.Node, top bool, opt ExportOptions) error 
 	if top {
 		name = n.Path
 	}
-	if err := writeInfo(w, infoBlock{Name: name, ReadError: n.HasError}); err != nil {
+	if err := writeInfo(w, infoBlock{Name: name, ReadError: n.ReadError()}); err != nil {
 		return err
 	}
 	for _, f := range n.FileEntries {

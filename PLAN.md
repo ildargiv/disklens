@@ -86,6 +86,32 @@ bubbletea+lipgloss: live-прогресс (Progress callback + throttle), **esc 
   hash-верификация дубликатов, цветовая маркировка типов файлов в TUI.
 - Критерий: публичный релиз v0.1.
 
+### Этап 5.5 — Точность, брендинг, установщик ✅
+- Сканер: junction/mount point больше не считаются файлами (Go ≥1.23 отдаёт их как
+  ModeIrregular); жёсткие ссылки считаются один раз (file id из FileIdBothDirectoryInfo,
+  на POSIX dev+ino); `GetCompressedFileSizeW` теперь реально работает (раньше `e != nil`
+  всегда было true и диск-размер молча подменялся apparent); batch-перечисление каталогов
+  через `GetFileInformationByHandleEx` (меньше syscalls на файл).
+- Корзина: `EmptyRecycleBin` всегда возвращал ошибку (та же проблема с `e != nil`);
+  `FOF_WANTNUKEWARNING` — Windows спрашивает, если объект не влезает в Корзину.
+- CLI: `--exclude/--exclude-from`, `--json`, `--files`, `--min-size`, `--sort`, `--strict`,
+  `--count-links`, прогресс в stderr; исправлены `--depth` (показывал на уровень больше)
+  и строка итога (печатала apparent вместо on-disk).
+- MCP: авто-скан во всех инструментах, `cache_age_seconds`, обновление кэша после удаления,
+  `largest_files`, Windows-правила classify (+ статус `keep`).
+- TUI: `r` пересканировать, `o` Проводник, `a` размер, `?` справка, проценты, esc на верхнем
+  уровне больше не выходит.
+- Брендинг «DiskLens by KopiTehnik», иконка, Inno Setup установщик (x64+ARM64, без админа,
+  PATH, меню Проводника), сборка и smoke-тест установщика в GitHub Actions.
+
+### Следующие этапы (предложение)
+1. План и откат: `disklens free 50GB` → план с риском/стоимостью восстановления, журнал
+   удалений и `restore_last` (MCP: measure → plan → apply/undo).
+2. Снапшоты + `growth`: «что выросло с прошлого скана»; позже USN Journal.
+3. MFT-бэкенд `--fast` (админ) + corpus-тесты эталонных деревьев (junction, hardlink,
+   sparse, длинные пути, кириллица) в CI.
+4. Хеш-верификация дубликатов, мультивыбор в TUI, цвета по типам.
+
 ## Технические решения
 
 - Память: интерактивный режим держит всё дерево в памяти (узлы компактные);

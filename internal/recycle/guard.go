@@ -21,7 +21,7 @@ func Guard(path string) error {
 	segs := strings.Split(low, "\\")
 	for _, s := range segs[1:] {
 		switch s {
-		case "windows", "system volume information", ".git":
+		case "windows", "system volume information", "$recycle.bin", ".git":
 			return fmt.Errorf("refusing to touch a protected path: %s", path)
 		}
 	}

@@ -19,6 +19,11 @@ const (
 	fofAllowUndo      = 0x0040 // -> Recycle Bin
 	fofNoConfirmMkDir = 0x0100
 	fofNoErrorUI      = 0x0400
+	// fofWantNukeWarning makes the shell ask before *permanently* deleting an
+	// item that cannot go to the Recycle Bin (too big for the bin quota,
+	// network share, removable drive without a bin). Without it, ALLOWUNDO
+	// silently degrades to a hard delete in exactly those cases.
+	fofWantNukeWarning = 0x4000
 
 	sherbNoConfirmation = 0x1
 	sherbNoProgressUI   = 0x2
@@ -63,26 +68,29 @@ func ToRecycleBin(path string) error {
 	ops := shellFileOpStructW{
 		WFunc:  foDelete,
 		PFrom:  &name[0],
-		FFlags: fofAllowUndo | fofSilent | fofNoConfirm | fofNoConfirmMkDir | fofNoErrorUI,
+		FFlags: fofAllowUndo | fofWantNukeWarning | fofSilent | fofNoConfirm | fofNoConfirmMkDir | fofNoErrorUI,
 	}
-	// SHFileOperationW only reports failures via the struct: its return value
-	// is meaningless.
-	procSHFileOperationW.Call(uintptr(unsafe.Pointer(&ops)))
+	r, _, _ := procSHFileOperationW.Call(uintptr(unsafe.Pointer(&ops)))
 	if ops.AnyOperationsAborted != 0 {
-		return fmt.Errorf("operation aborted by the shell (item may be in use or protected)")
+		return fmt.Errorf("operation aborted (item in use, protected, or permanent deletion was declined)")
+	}
+	if r != 0 {
+		return fmt.Errorf("SHFileOperationW failed with code 0x%x (item may be in use or protected)", r)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("item is still present after the move to the Recycle Bin: %s", path)
 	}
 	return nil
 }
 
 // EmptyRecycleBin permanently destroys everything currently in the Recycle Bin.
 func EmptyRecycleBin() error {
-	r, _, e := procSHEmptyRecycleBinW.Call(
+	// The return value is an HRESULT; the error from Call is GetLastError,
+	// which is always non-nil and must not be used to detect failure.
+	r, _, _ := procSHEmptyRecycleBinW.Call(
 		0, 0, uintptr(sherbNoConfirmation|sherbNoProgressUI|sherbNoSound))
-	if e != nil {
-		return fmt.Errorf("SHEmptyRecycleBinW failed: %w", e)
-	}
-	// S_OK == 0; S_FALSE means the bin was already empty, which is fine.
-	if r != 0 && r != 1 {
+	// S_OK == 0; S_FALSE / ERROR_NO_MORE_FILES mean the bin was already empty.
+	if r != 0 && r != 1 && uint32(r) != 0x80070012 {
 		return fmt.Errorf("SHEmptyRecycleBinW failed: 0x%x", r)
 	}
 	return nil
@@ -102,19 +110,16 @@ type shqueryrbinfo struct {
 
 var procSHQueryRecycleBinW = shell32.NewProc("SHQueryRecycleBinW")
 
-// Query returns the size and item count of the Recycle Bin for the default
-// root (pszRootPath = NULL: the drive OpenCode/disklens runs on).
+// Query returns the total size and item count of the Recycle Bins on all
+// drives (pszRootPath = NULL).
 func Query() (QueryInfo, error) {
 	info := shqueryrbinfo{CbSize: uint32(unsafe.Sizeof(shqueryrbinfo{}))}
-	r, _, e := procSHQueryRecycleBinW.Call(0, uintptr(unsafe.Pointer(&info)))
-	switch r {
+	r, _, _ := procSHQueryRecycleBinW.Call(0, uintptr(unsafe.Pointer(&info)))
+	switch uint32(r) {
 	case 0: // S_OK
 		return QueryInfo{SizeBytes: info.SizeBytes, Items: info.NumItems}, nil
-	case 1, 0x80070018: // S_FALSE / ERROR_NO_MORE_FILES: the bin is simply empty
+	case 1, 0x80070012, 0x80070018: // S_FALSE / no more files: the bin is simply empty
 		return QueryInfo{}, nil
-	}
-	if e != nil {
-		return QueryInfo{}, fmt.Errorf("SHQueryRecycleBinW failed: %w", e)
 	}
 	return QueryInfo{}, fmt.Errorf("SHQueryRecycleBinW failed: 0x%x", r)
 }

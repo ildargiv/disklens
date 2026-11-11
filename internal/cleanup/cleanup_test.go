@@ -131,3 +131,53 @@ func TestClassifyMLRules(t *testing.T) {
 		t.Errorf("unexpected candidate set: %+v", got)
 	}
 }
+
+func TestClassifyWindowsRules(t *testing.T) {
+	n := func(path string, disk int64, kids ...*scanner.Node) *scanner.Node {
+		return &scanner.Node{Name: filepath.Base(filepath.FromSlash(path)), Path: path, Disk: disk, Children: kids}
+	}
+	// Synthetic Windows-shaped tree (forward slashes so filepath.Base works
+	// on every OS; rules match case- and separator-insensitively).
+	root := n("C:", 0,
+		n("C:/Windows", 0,
+			n("C:/Windows/WinSxS", 8<<30),
+			n("C:/Windows/Installer", 3<<30),
+		),
+		n("C:/Windows.old", 20<<30),
+		n("C:/$Recycle.Bin", 1<<30),
+		n("C:/Users", 0, n("C:/Users/me", 0, n("C:/Users/me/AppData", 0,
+			n("C:/Users/me/AppData/Local", 0,
+				n("C:/Users/me/AppData/Local/Google", 0, n("C:/Users/me/AppData/Local/Google/Chrome", 0,
+					n("C:/Users/me/AppData/Local/Google/Chrome/User Data", 0, n("C:/Users/me/AppData/Local/Google/Chrome/User Data/Default", 0,
+						n("C:/Users/me/AppData/Local/Google/Chrome/User Data/Default/Cache", 2<<30),
+						n("C:/Users/me/AppData/Local/Google/Chrome/User Data/Default/Code Cache", 1<<30),
+					)))),
+				n("C:/Users/me/AppData/Local/CrashDumps", 1<<30),
+			),
+		), n("C:/Users/me/Projects", 0, n("C:/Users/me/Projects/app", 0, n("C:/Users/me/Projects/app/Cache", 5<<30))))),
+	)
+	want := map[string]string{
+		"C:/Windows/WinSxS":    "keep",
+		"C:/Windows/Installer": "keep",
+		"C:/Windows.old":       "review_first",
+		"C:/$Recycle.Bin":      "keep",
+		"C:/Users/me/AppData/Local/Google/Chrome/User Data/Default/Cache":      "safe",
+		"C:/Users/me/AppData/Local/Google/Chrome/User Data/Default/Code Cache": "safe",
+		"C:/Users/me/AppData/Local/CrashDumps":                                 "safe",
+	}
+	got := map[string]string{}
+	for _, c := range Classify(root) {
+		got[c.Path] = c.Status
+	}
+	for p, w := range want {
+		if got[p] != w {
+			t.Errorf("%s: status %q, want %q", p, got[p], w)
+		}
+	}
+	if _, ok := got["C:/Users/me/Projects/app/Cache"]; ok {
+		t.Error("a project's own Cache folder must not be classified (no browser context)")
+	}
+	if len(got) != len(want) {
+		t.Errorf("unexpected candidate set: %+v", got)
+	}
+}
